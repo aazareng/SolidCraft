@@ -230,6 +230,11 @@ fn breadcrumbs_show_a_parts_mates_planes_and_origin() {
     h.step(&json!({"click": {"handle": format!("breadcrumb:{i}:0")}})).unwrap();
     h.frames(1);
     assert!(matches!(h.app.session.selection.as_slice(), [Sel::Plane { .. }]), "{:?}", h.app.session.selection);
+    // A part's planes are off by default: the selected one is drawn while it stays selected.
+    let shown = crate::viewport::selected_hidden_origins(&h.app);
+    assert!(matches!(shown.as_slice(), [(_, crate::viewport::HoveredOrigin::Plane(_))]), "{shown:?}");
+    h.app.session.selection.clear();
+    assert!(crate::viewport::selected_hidden_origins(&h.app).is_empty());
 }
 
 /// The rules a constraint's icon offers: a mate between two planes can loosen to flush (as

@@ -4206,8 +4206,37 @@ pub(crate) enum HoveredOrigin {
 /// its Origin, or a part's Origin left off (the default). The view adds it for the hover only; it
 /// is not in the pick lists, and its eye and saved visibility stay as they are (#15658).
 pub(crate) fn hovered_hidden_origin(app: &SolveApp) -> Option<(String, HoveredOrigin)> {
-    use solidcraft_engine::doc::construct::ConstructGeom;
     let (name, item) = browser_hovered_origin(app)?;
+    hidden_origin_of(app, name, item)
+}
+
+/// The Origin items selected that the view does not draw (hidden, or a part's Origin left off),
+/// as [`hovered_hidden_origin`] draws a hovered row's: a plane, axis or origin point picked from
+/// the breadcrumbs, or by Plane Mate, shows while it is selected. Not in the pick lists.
+pub(crate) fn selected_hidden_origins(app: &SolveApp) -> Vec<(String, HoveredOrigin)> {
+    let item_of = |name: &str| -> Option<&'static str> {
+        solidcraft_engine::origins::ITEMS
+            .iter()
+            .copied()
+            .find(|item| *item == name)
+            .or_else(|| solidcraft_engine::origins::item(name).map(|(_, item)| item))
+    };
+    app.session
+        .selection
+        .iter()
+        .filter_map(|s| match s {
+            Sel::Plane { name } | Sel::Axis { name } | Sel::ConstructionPoint { name } => Some(name.as_str()),
+            // The design's own origin point, as the breadcrumbs select it.
+            Sel::Vertex { body, point } if body.is_empty() && *point == Vec3::ZERO => Some("O"),
+            _ => None,
+        })
+        .filter_map(|name| hidden_origin_of(app, name, item_of(name)?))
+        .collect()
+}
+
+/// What the view adds for Origin item `name` (`item` its kind) when it is not drawn already.
+fn hidden_origin_of(app: &SolveApp, name: &str, item: &'static str) -> Option<(String, HoveredOrigin)> {
+    use solidcraft_engine::doc::construct::ConstructGeom;
     let size = origin_plane_size(app);
     let hidden = if solidcraft_engine::origins::item(name).is_some() {
         let geom = app.session.origin_geometry(name)?;
@@ -7461,22 +7490,32 @@ fn build_highlight_with_projection(app: &SolveApp, projection: impl FnOnce() -> 
         // A hidden axis joins the drawn ones below and is drawn as they are, lit.
         let browser_lit = browser_hovered_origin(app).map(|(n, _)| n);
         let hidden_lit = hovered_hidden_origin(app);
-        let (mut hidden_axis, mut hidden_part_axis) = (None, None);
-        match hidden_lit {
-            Some((_, HoveredOrigin::Plane(q))) => quad(&mut sc, &q, t.origin_plane_hover, t.origin_plane_edge, through),
-            Some((name, HoveredOrigin::Axis { item, origin, dir })) => {
-                if solidcraft_engine::origins::item(&name).is_some() {
-                    hidden_part_axis = Some(component_axis_segment(name, origin, dir, size));
-                } else {
-                    hidden_axis = Some((item, dir));
+        let (mut hidden_axes, mut hidden_part_axes) = (Vec::new(), Vec::new());
+        // Hidden Origin items that are selected (from the breadcrumbs, by Plane Mate) are drawn
+        // too, in the selection's colours, while they stay selected.
+        let selected_fill = Color32::from_rgba_unmultiplied(t.sel_face.r(), t.sel_face.g(), t.sel_face.b(), 150);
+        let shown = hidden_lit
+            .into_iter()
+            .map(|h| (h, false))
+            .chain(selected_hidden_origins(app).into_iter().map(|h| (h, true)));
+        for ((name, item), selected) in shown {
+            match item {
+                HoveredOrigin::Plane(q) if selected => quad(&mut sc, &q, selected_fill, t.sel_edge, through),
+                HoveredOrigin::Plane(q) => quad(&mut sc, &q, t.origin_plane_hover, t.origin_plane_edge, through),
+                HoveredOrigin::Axis { item, origin, dir } => {
+                    if solidcraft_engine::origins::item(&name).is_some() {
+                        hidden_part_axes.push(component_axis_segment(name, origin, dir, size));
+                    } else {
+                        hidden_axes.push((item, dir));
+                    }
                 }
+                // Points are screen-space dots (`points_2d`).
+                HoveredOrigin::Point(_) => {}
             }
-            // Points are screen-space dots (`points_2d`).
-            Some((_, HoveredOrigin::Point(_))) | None => {}
         }
         // Origin axes: solid near the origin, then either one thinner line on both sides to the
         // edges of the view (#11123), or dashed a little beyond (the preference off).
-        let axes: Vec<_> = origin_axes(app).into_iter().chain(hidden_axis).collect();
+        let axes: Vec<_> = origin_axes(app).into_iter().chain(hidden_axes).collect();
         let across = (app.preferences.origin_axes_across_view && !axes.is_empty()).then(projection);
         for (name, dir) in axes {
             let col = match name {
@@ -7509,7 +7548,7 @@ fn build_highlight_with_projection(app: &SolveApp, projection: impl FnOnce() -> 
         // Construction axes (dashed, the length of the origin axes either side) and points (a
         // small star), in the construction colour. A component's origin axis instead reads like
         // the design Origin's: solid beside its origin, dashed beyond, in the axis's own colour.
-        for (name, a, b) in construction_axis_segments(app).into_iter().chain(hidden_part_axis) {
+        for (name, a, b) in construction_axis_segments(app).into_iter().chain(hidden_part_axes) {
             let on = sel.iter().any(|x| matches!(x, Sel::Axis { name: n } if *n == name))
                 || matches!(hover, Some(Hit::Axis { name: n }) if *n == name)
                 || browser_lit == Some(name.as_str())
@@ -10735,6 +10774,14 @@ fn points_2d(app: &SolveApp, painter: &egui::Painter, proj: &Proj, navigating: b
         && let Some(sp) = proj.to_screen(p)
     {
         painter.circle(sp, 4.5, lit_dot.0, lit_dot.1);
+    }
+    // A hidden origin point that is selected (from the breadcrumbs): drawn as selected.
+    for (_, h) in selected_hidden_origins(app) {
+        if let HoveredOrigin::Point(p) = h
+            && let Some(sp) = proj.to_screen(p)
+        {
+            painter.circle(sp, 5.0, t.sel_edge, Stroke::new(1.5, t.sel_edge));
+        }
     }
     // A component's origin point: the design Origin's dot at the placement's origin, painted
     // after the scene like the design's. The raycast that hides the design's dot behind bodies
