@@ -170,6 +170,36 @@ fn breadcrumbs_show_a_parts_face_feature_and_sketch() {
     assert_eq!(h.app.session.selection, vec![Sel::Feature { id: base }]);
 }
 
+/// One linked design placed twice (two placements of one component, and a second link to the same
+/// file): a face picked on a later copy shows that copy in the breadcrumbs, not the first.
+#[test]
+fn breadcrumbs_name_the_copy_picked() {
+    let folder = std::env::temp_dir().join(format!("solidcraft-crumb-copies-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).unwrap();
+    let file = folder.join("plate.sc");
+    let mut s = Session::default();
+    s.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10})).unwrap();
+    s.execute("file.save", &json!({"path": file, "overwrite": true})).unwrap();
+    let mut s = Session::default();
+    s.execute("component.insert_design", &json!({"path": file})).unwrap();
+    let reused = s.execute("component.insert_design", &json!({"path": file, "translate": [0, 40, 0], "reuse": true})).unwrap();
+    let other = s.execute("component.insert_design", &json!({"path": file, "translate": [0, 80, 0]})).unwrap();
+    s.execute("file.save", &json!({"path": folder.join("asm.sc"), "overwrite": true})).unwrap();
+    let mut h = Harness::new();
+    *h.app = SolveApp::new(s, Services::default());
+    h.app.home.open = false;
+    h.frames(3);
+    for (result, y) in [(&reused, 45.0), (&other, 85.0)] {
+        let occ = result["occurrence"].as_u64().expect("an occurrence");
+        pick(&mut h, Vec3::new(5.0, y, 10.0));
+        let cols = h.app.menu.card.crumbs.as_ref().map(|(_, c)| c.clone()).unwrap_or_default();
+        let part = cols.last().and_then(|c| c.main.sel.clone());
+        assert_eq!(part, Some(Sel::Occurrence { path: vec![occ] }), "the copy at y {y}: {cols:?}");
+    }
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
 /// What the breadcrumbs say the selection measures, once it is in.
 fn measured(h: &mut Harness) -> Option<String> {
     for _ in 0..300 {

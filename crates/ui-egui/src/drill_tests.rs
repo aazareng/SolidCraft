@@ -85,6 +85,36 @@ fn a_face_in_a_subassembly_goes_up_to_its_part_then_the_subassembly() {
     assert_eq!(h.app.session.selection, vec![top]);
 }
 
+/// A linked design holding two parts comes in as one component with a body per part: a face goes
+/// up to its part's body first, then to the linked copy.
+#[test]
+fn a_face_of_a_linked_assembly_goes_up_to_its_parts_body_then_the_copy() {
+    let folder = std::env::temp_dir().join(format!("solidcraft-drill-link-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).unwrap();
+    let file = folder.join("two.sc");
+    let mut s = Session::default();
+    s.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10})).unwrap();
+    s.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10, "corner": [30, 0, 0], "operation": "new"})).unwrap();
+    s.execute("file.save", &json!({"path": file, "overwrite": true})).unwrap();
+    let mut s = Session::default();
+    let link = s.execute("component.insert_design", &json!({"path": file})).unwrap();
+    let occ = link["occurrence"].as_u64().unwrap();
+    let mut h = Harness::new();
+    *h.app = SolveApp::new(s, Services::default());
+    h.app.home.open = false;
+    h.frames(3);
+    let top = face(&h.app, Vec3::new(35.0, 5.0, 10.0));
+    let Sel::Face { body, .. } = &top else { unreachable!() };
+    let body = body.clone();
+    h.app.session.selection = vec![top.clone()];
+    h.app.start("ui.drill_up");
+    assert_eq!(h.app.session.selection, vec![Sel::Body { name: body }], "the part's body first");
+    h.app.start("ui.drill_up");
+    assert_eq!(h.app.session.selection, vec![Sel::Occurrence { path: vec![occ] }], "then the linked copy");
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
 /// Alt + wheel over the view drills: a notch up takes the face to its part, a notch down brings
 /// it back, and the view doesn't zoom.
 #[test]

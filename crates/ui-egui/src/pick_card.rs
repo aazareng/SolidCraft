@@ -293,21 +293,33 @@ pub(crate) fn hierarchy(app: &SolveApp, sel: &Sel) -> Vec<Column> {
         Sel::Edge { body, index, point } => crate::smart_edit::edge_feature(app, body, *index, *point),
         _ => None,
     };
-    if let Some((made, _)) = made {
+    // A linked design's import holds no history to show: no feature for it.
+    let imported = |id: u64| {
+        doc.feature(id).is_some_and(|f| {
+            matches!(f.kind, solidcraft_engine::doc::FeatureKind::Import { .. } | solidcraft_engine::doc::FeatureKind::MeshImport { .. })
+                && doc.links.contains_key(&f.component)
+        })
+    };
+    if let Some((made, _)) = made.filter(|(id, _)| !imported(*id)) {
         out.extend(feature_col(app, made));
     }
-    // The body, when it is the pick; otherwise the trail goes straight to the part.
-    if let Sel::Body { name } = sel
-        && !name.is_empty()
-    {
-        out.push(col(name.clone(), Some(sel.clone()), "body"));
+    // The body, when it is the pick, or when it is one part of a linked assembly (which comes in
+    // as one component, each part a body); otherwise the trail goes straight to the part.
+    match sel {
+        Sel::Body { name } if !name.is_empty() => out.push(col(name.clone(), Some(sel.clone()), "body")),
+        Sel::Face { body, .. } | Sel::Edge { body, .. } | Sel::Vertex { body, .. } if crate::drill::linked_part_body(app, body) => {
+            out.push(col(body.clone(), Some(Sel::Body { name: body.clone() }), "component"));
+        }
+        _ => {}
     }
     // The part and each assembly around it, up to the one being edited.
     let path = match sel {
         Sel::Occurrence { path } => path.clone(),
+        // The placement the body sits in (not the component's first: a later copy's body is in a
+        // later placement).
         Sel::Body { name } => {
-            let component = app.session.world_state().ok().and_then(|st| st.body(name).map(|b| b.component)).unwrap_or(0);
-            if component == 0 { Vec::new() } else { doc.first_path(component) }
+            let model = app.session.model.state();
+            doc.body_frames(&model).into_iter().find(|(n, ..)| n == name).map(|(_, _, path, _)| path).unwrap_or_default()
         }
         _ => crate::drill::part_path(app, sel),
     };

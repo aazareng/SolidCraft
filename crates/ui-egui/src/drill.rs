@@ -157,6 +157,17 @@ fn replace_last(app: &mut SolveApp, with: Vec<Sel>) {
     }
 }
 
+/// Whether `body` is one part of a linked design that holds several: a linked assembly, whose
+/// parts come in as bodies of one component (named after the part, `1 (1:4)`).
+pub(crate) fn linked_part_body(app: &SolveApp, body: &str) -> bool {
+    let model = app.session.model.state();
+    let frames = app.session.doc.body_frames(&model);
+    let Some((_, component, path, _)) = frames.iter().find(|(n, ..)| n == body) else { return false };
+    *component != 0
+        && app.session.doc.links.get(component).is_some_and(|l| l.is_design())
+        && frames.iter().filter(|(_, c, p, _)| c == component && p == path).count() > 1
+}
+
 /// The placement path of the part a face, edge or point is on, all the way down (a part inside a
 /// sub-assembly: the sub-assembly, then the part), so Drill Up takes the part first and its
 /// sub-assembly next. Empty: the design's own body.
@@ -178,7 +189,12 @@ pub(crate) fn part_path(app: &SolveApp, sel: &Sel) -> Vec<u64> {
 fn parent(app: &SolveApp, sel: &Sel) -> Option<Up> {
     let doc = &app.session.doc;
     match sel {
-        Sel::Face { .. } | Sel::Edge { .. } | Sel::Vertex { .. } => {
+        Sel::Face { body, .. } | Sel::Edge { body, .. } | Sel::Vertex { body, .. } => {
+            // A linked assembly comes in as one component, each of its parts a body: the part's
+            // body is the step between the face and the whole linked copy.
+            if linked_part_body(app, body) {
+                return Some(Up::One(Sel::Body { name: body.clone() }));
+            }
             let path = part_path(app, sel);
             if !path.is_empty() {
                 return Some(Up::One(Sel::Occurrence { path }));
@@ -188,6 +204,12 @@ fn parent(app: &SolveApp, sel: &Sel) -> Option<Up> {
             (chain.len() > 1).then_some(Up::Many(chain))
         }
         Sel::Occurrence { path } => (path.len() > 1).then(|| Up::One(Sel::Occurrence { path: path[..path.len() - 1].to_vec() })),
+        // A body: the placement it sits in.
+        Sel::Body { name } => {
+            let model = app.session.model.state();
+            let path = app.session.doc.body_frames(&model).into_iter().find(|(n, ..)| n == name).map(|(_, _, path, _)| path)?;
+            (!path.is_empty()).then(|| Up::One(Sel::Occurrence { path }))
+        }
         Sel::Feature { id } => {
             let f = doc.feature(*id)?;
             let at = doc.features.iter().position(|x| x.id == *id)?;

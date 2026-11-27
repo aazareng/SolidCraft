@@ -85,6 +85,53 @@ fn a_holes_edge_opens_the_holes_sketch() {
     assert_eq!(h.app.session.active_sketch, Some(pts), "the hole's sketch, not the block's");
 }
 
+/// A face of a linked part (its design in another file): the part opens in place at that copy,
+/// and the sketch of the feature that made the face opens there.
+#[test]
+fn a_linked_parts_face_opens_the_part_in_place_and_its_sketch() {
+    let folder = std::env::temp_dir().join(format!("solidcraft-smart-edit-link-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).unwrap();
+    let part = folder.join("part.sc");
+    let mut s = solidcraft_engine::Session::default();
+    for (id, p) in [
+        ("sketch.create", json!({"plane": "XY", "name": "Base"})),
+        ("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [60, 20]})),
+        ("sketch.finish", json!({})),
+        ("solid.extrude", json!({"distance": 10})),
+        ("file.save", json!({"path": part, "overwrite": true})),
+    ] {
+        s.execute(id, &p).unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    let mut app = crate::SolveApp::new(solidcraft_engine::Session::default(), Default::default());
+    app.run("component.insert_design", json!({"path": part, "translate": [100, 0, 0]})).unwrap();
+    app.run("file.save", json!({"path": folder.join("asm.sc"), "overwrite": true})).unwrap();
+    // The linked part's top, at x 100..160.
+    let p = Vec3::new(130.0, 10.0, 10.0);
+    let st = app.session.world_state().unwrap();
+    let b = &st.bodies[0];
+    let m = b.mesh();
+    let (_, f) = m.triangles.iter().zip(&m.tri_face).find(|(t, _)| m.tri(t).is_some_and(|tri| crate::preview::point_triangle_dist(p, tri[0], tri[1], tri[2]) < 1e-6)).expect("the top");
+    let sel = Sel::Face { body: b.name.clone(), index: *f as usize, point: p };
+    drop(st);
+    app.session.selection = vec![sel];
+    crate::smart_edit::press(&mut app);
+    let ctx = egui::Context::default();
+    let began = std::time::Instant::now();
+    while app.session.active_sketch.is_none() {
+        crate::file_load::tick(&mut app, &ctx);
+        crate::edit_in_place::tick(&mut app);
+        crate::smart_edit::tick(&mut app);
+        assert!(began.elapsed() < std::time::Duration::from_secs(120), "the part's sketch never opened");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(app.session.path.as_deref().is_some_and(|p| crate::documents::same_path(p, &part.to_string_lossy())), "the part is shown");
+    assert!(app.edit_in_place.active.is_some(), "in place, the assembly around it");
+    let base = app.session.doc.features.iter().find(|f| f.name == "Base").unwrap().id;
+    assert_eq!(app.session.active_sketch, Some(base));
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
 /// Nothing picked: the sketch edited last opens; in an empty design, a new sketch starts on the
 /// plane facing the screen.
 #[test]

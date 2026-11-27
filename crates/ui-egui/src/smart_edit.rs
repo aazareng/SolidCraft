@@ -122,8 +122,99 @@ pub(crate) fn face_feature(app: &SolveApp, body: &str, index: usize, point: soli
     Some((made, placement))
 }
 
-/// A face: the sketch of the feature that made it, else that feature, edited.
+/// A Smart Edit carried into a linked design: the design opened in place (`part`, its file), and
+/// where the pick was in that design's own coordinates; once it shows, the same pick there is
+/// edited (a face, or an edge), so a part linked inside a linked assembly is reached step by step.
+pub(crate) struct Follow {
+    part: String,
+    at: solidcore_record::Vec3,
+    edge: bool,
+    frames: u32,
+}
+
+/// The most frames a carried Smart Edit waits for the linked design to open.
+const FOLLOW_FRAMES: u32 = 1200;
+
+/// A pick on a body of a linked design: there is nothing to edit here (the link holds its bodies
+/// only), so the design it comes from opens in place at that copy, and the pick follows. Whether
+/// it did.
+fn into_link(app: &mut SolveApp, body: &str, point: solidcore_record::Vec3, edge: bool) -> bool {
+    let model = app.session.model.state();
+    let Some((_, component, path, _)) = app.session.doc.body_frames(&model).into_iter().find(|(n, ..)| n == body) else { return false };
+    if component == 0 || !app.session.doc.links.get(&component).is_some_and(|l| l.is_design()) {
+        return false;
+    }
+    let Ok(links) = app.session.execute("component.links", &serde_json::json!({})) else { return false };
+    let Some(part) = links["links"].as_array().into_iter().flatten().find(|l| l["component"].as_u64() == Some(component)).and_then(|l| l["file"].as_str()).map(str::to_string)
+    else {
+        return false;
+    };
+    // The linked design's bodies sit in the component as they sit in that design.
+    let Some(at) = app.session.occurrence_placement(&path).ok().and_then(|p| solidcraft_engine::doc::mat_inverse(&p.world)).map(|inv| solidcraft_engine::doc::apply_point(&inv, point))
+    else {
+        return false;
+    };
+    app.smart_edit_follow = Some(Follow { part, at, edge, frames: 0 });
+    crate::edit_in_place::open(app, component, Some(path));
+    true
+}
+
+/// Each frame: a carried Smart Edit whose linked design now shows edits the same pick there.
+pub(crate) fn tick(app: &mut SolveApp) {
+    let Some(f) = app.smart_edit_follow.as_mut() else { return };
+    f.frames += 1;
+    let part = f.part.clone();
+    let here = app.session.path.as_deref().is_some_and(|p| crate::documents::same_path(p, &part))
+        && app.edit_in_place.active.as_ref().is_some_and(|c| crate::documents::same_path(&c.part, &part));
+    if !here || app.file_load.busy() {
+        if f.frames > FOLLOW_FRAMES {
+            app.smart_edit_follow = None;
+        }
+        return;
+    }
+    let Some(f) = app.smart_edit_follow.take() else { return };
+    match pick_at(app, f.at, f.edge) {
+        Some(sel) => {
+            app.session.selection = vec![sel];
+            press(app);
+        }
+        None => app.set_status("Smart Edit: the pick is not on this design", true),
+    }
+}
+
+/// The face (or edge) of the design shown nearest world point `at`, when one is close.
+fn pick_at(app: &SolveApp, at: solidcore_record::Vec3, edge: bool) -> Option<Sel> {
+    let world = crate::open_meshing::session_world(&app.session);
+    let mut best: Option<(f64, Sel)> = None;
+    for b in &world.bodies {
+        let m = b.mesh();
+        let tol = (m.bounds().diagonal() * 0.01).max(0.5);
+        if edge {
+            for (index, e) in m.edges.iter().enumerate() {
+                let d = e.windows(2).map(|w| at.dist_to_segment(w[0], w[1])).fold(f64::INFINITY, f64::min);
+                if d < tol && best.as_ref().is_none_or(|(bd, _)| d < *bd) {
+                    best = Some((d, Sel::Edge { body: b.name.clone(), index, point: at }));
+                }
+            }
+        } else {
+            for (t, f) in m.triangles.iter().zip(&m.tri_face) {
+                let Some(tri) = m.tri(t) else { continue };
+                let d = crate::dialogs::point_tri_dist(at, tri);
+                if d < tol && best.as_ref().is_none_or(|(bd, _)| d < *bd) {
+                    best = Some((d, Sel::Face { body: b.name.clone(), index: *f as usize, point: at }));
+                }
+            }
+        }
+    }
+    best.map(|(_, s)| s)
+}
+
+/// A face: the sketch of the feature that made it, else that feature, edited; on a linked design,
+/// the design it comes from, opened in place, and the face there.
 fn face(app: &mut SolveApp, body: &str, index: usize, point: solidcore_record::Vec3) -> Result<(), String> {
+    if into_link(app, body, point, false) {
+        return Ok(());
+    }
     let (made, placement) = face_feature(app, body, index, point).ok_or("no feature of this part made that face")?;
     if app.session.doc.feature(made).is_some_and(|f| matches!(f.kind, FeatureKind::Import { .. } | FeatureKind::MeshImport { .. })) {
         return Err("an imported body has nothing to edit".into());
@@ -172,6 +263,9 @@ fn inside_face(app: &SolveApp, body: &str, face: usize, near: solidcore_record::
 /// An edge: the feature that made it (a hole's circle: the hole), edited as a face's is, through
 /// its sketch, in the part's placement when it is not the active part.
 fn edge(app: &mut SolveApp, body: &str, index: usize, point: solidcore_record::Vec3) -> Result<(), String> {
+    if into_link(app, body, point, true) {
+        return Ok(());
+    }
     let (made, placement) = edge_feature(app, body, index, point).ok_or("no feature of this part made that edge")?;
     if app.session.doc.feature(made).is_some_and(|f| matches!(f.kind, FeatureKind::Import { .. } | FeatureKind::MeshImport { .. })) {
         return Err("an imported body has nothing to edit".into());

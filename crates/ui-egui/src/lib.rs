@@ -860,6 +860,8 @@ pub struct SolveApp {
     pub(crate) pending_feature_edit: Option<feature_edit::PendingFeatureEdit>,
     /// The sketch opened for editing last, which Smart Edit with nothing picked opens again.
     pub(crate) smart_edit_last: Option<u64>,
+    /// A Smart Edit carried into a linked design it opened in place, waiting for it to show.
+    pub(crate) smart_edit_follow: Option<smart_edit::Follow>,
     /// The steps Drill Up made, for Drill Down to retrace.
     pub(crate) drill: drill::Trail,
     /// The feature being reopened from a click and where, until its dialog opens (UI state only).
@@ -1259,6 +1261,7 @@ impl SolveApp {
             edit_in_place: Default::default(),
             pending_feature_edit: None,
             smart_edit_last: None,
+            smart_edit_follow: None,
             drill: Default::default(),
             edit_anchor_hint: None,
             op_check: op_auto::OpCheck::default(),
@@ -4655,6 +4658,7 @@ impl SolveApp {
         timeline::tick_import_checks(self, ctx);
         timeline::tick_feature_checks(self, ctx);
         edit_in_place::tick(self);
+        smart_edit::tick(self);
         browser_links::refresh(self, ctx);
         let typing = ctx.egui_wants_keyboard_input();
         if ctx.input(|i| i.pointer.button_clicked(egui::PointerButton::Extra1) || (i.key_pressed(egui::Key::BrowserBack) && !typing)) {
