@@ -1,0 +1,74 @@
+//! Smart Edit: one key edits the picked thing, or finishes the sketch open.
+use serde_json::json;
+use solidcore_record::Vec3;
+use solidcraft_engine::Sel;
+use solidcraft_engine::doc::FeatureKind;
+
+use crate::scenario::Harness;
+
+/// A 60 × 20 × 10 block extruded from a sketch named Base.
+fn block() -> (Harness, u64) {
+    let mut h = Harness::new();
+    h.app.home.open = false;
+    for (id, p) in [
+        ("sketch.create", json!({"plane": "XY", "name": "Base"})),
+        ("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [60, 20]})),
+        ("sketch.finish", json!({})),
+        ("solid.extrude", json!({"distance": 10})),
+    ] {
+        h.app.run(id, p).unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    h.frames(3);
+    let base = h.app.session.doc.features.iter().find(|f| matches!(f.kind, FeatureKind::Sketch { .. })).unwrap().id;
+    (h, base)
+}
+
+/// A pick of the face a point of the exact geometry lies on.
+fn face(h: &Harness, p: Vec3) -> Sel {
+    let st = h.app.session.world_state().unwrap();
+    let mut best: Option<(f64, Sel)> = None;
+    for b in &st.bodies {
+        let m = b.mesh();
+        for (t, f) in m.triangles.iter().zip(&m.tri_face) {
+            let Some([a, bb, c]) = m.tri(t) else { continue };
+            let d = crate::preview::point_triangle_dist(p, a, bb, c);
+            if best.as_ref().is_none_or(|(bd, _)| d < *bd) {
+                best = Some((d, Sel::Face { body: b.name.clone(), index: *f as usize, point: p }));
+            }
+        }
+    }
+    best.map(|x| x.1).unwrap()
+}
+
+fn press(h: &mut Harness) {
+    crate::keymap::press(&mut h.app, "Shift+D", false);
+    h.frames(5);
+}
+
+/// The block's top face picked: its extrude's sketch opens; pressed again, the sketch finishes.
+#[test]
+fn a_face_opens_its_features_sketch_and_again_finishes_it() {
+    let (mut h, base) = block();
+    h.app.session.selection = vec![face(&h, Vec3::new(30.0, 10.0, 10.0))];
+    press(&mut h);
+    assert_eq!(h.app.session.active_sketch, Some(base));
+    press(&mut h);
+    assert_eq!(h.app.session.active_sketch, None);
+}
+
+/// Nothing picked: the sketch edited last opens; in an empty design, a new sketch starts on the
+/// plane facing the screen.
+#[test]
+fn nothing_picked_opens_the_last_sketch_or_starts_one() {
+    let (mut h, base) = block();
+    h.app.session.selection.clear();
+    press(&mut h);
+    assert_eq!(h.app.session.active_sketch, Some(base));
+
+    let mut h = Harness::new();
+    h.app.home.open = false;
+    h.frames(2);
+    press(&mut h);
+    let started = h.app.session.active_sketch.is_some() || h.app.dialog.as_ref().is_some_and(|d| matches!(d.kind, crate::dialogs::Kind::Sketch));
+    assert!(started, "a new sketch starts");
+}

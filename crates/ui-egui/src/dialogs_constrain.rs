@@ -54,7 +54,7 @@ pub fn start(_app: &SolveApp) -> Option<(Asm, Vec<SelInput>)> {
 /// plane is a plane, a round edge or face its axis, a datum axis an axis (it is drawn as an edge's
 /// middle, and its origin names the `axis`), any other edge (its middle, or a body's corner
 /// between two edges) an edge, and a sketch or construction point a point.
-fn shape(s: &SnapPt) -> RefShape {
+pub(crate) fn shape(s: &SnapPt) -> RefShape {
     match s.kind {
         SnapKind::FaceCenter => RefShape::Plane,
         SnapKind::CircleCenter => RefShape::Round,

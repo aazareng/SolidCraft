@@ -59,6 +59,51 @@ pub struct ToggleVisibilityParams {}
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ToggleVisibilityResult {}
 
+/// `ui.plane_mate` takes nothing: it acts on the app's selection and view.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct PlaneMateParams {}
+
+/// Never produced: headless calls are refused, and the app acts on its own selection.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PlaneMateResult {}
+
+/// `ui.ortho` takes nothing: it acts on the app's selection in its open sketch.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct OrthoParams {}
+
+/// Never produced: headless calls are refused, and the app acts on its own selection.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct OrthoResult {}
+
+/// `ui.smart_edit` takes nothing: it acts on the app's selection.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SmartEditParams {}
+
+/// Never produced: headless calls are refused, and the app opens its own editors.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct SmartEditResult {}
+
+/// `ui.drill_up` and `ui.drill_down` take nothing: they move the app's selection.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct DrillParams {}
+
+/// Never produced: headless calls are refused, and the app moves its own selection.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DrillResult {}
+
+/// `ui.shortcut_bar` takes nothing: it opens the app's bar at the pointer.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ShortcutBarParams {}
+
+/// Never produced: headless calls are refused.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ShortcutBarResult {}
+
 /// `ui.dialog_ok` takes nothing: it runs OK in the app's open dialog.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]

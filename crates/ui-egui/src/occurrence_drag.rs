@@ -4,7 +4,8 @@
 //! pointer in the plane through it that faces the view. Each frame runs `occurrence.drag`; the
 //! whole drag is one undo step, and Escape puts everything back as it was.
 //!
-//! Floating chains move together whichever member is grabbed. Parts held
+//! A floating chain moves together whichever member is grabbed, unless Drag moves only the part
+//! is on: then the grabbed part moves as far as its joints allow and the others stay. Parts held
 //! by joints to something fixed go to `joint_drag`; grounded parts and the active component's
 //! own bodies are left to the selection box. Both drags grab the part [`grabbed_face`] finds: a
 //! selected part under the pointer comes first, even behind another part (#15648).
@@ -35,6 +36,12 @@ pub struct Drag {
     /// The drag's undo step is on top of the history (it went in with the first frame that
     /// moved); the design it holds tells it from a step that replaced it.
     step: Option<Arc<Document>>,
+    /// The other parts of a floating chain, held where they are while the grabbed one moves as
+    /// far as its joints allow (Preferences: Drag moves only the part). Empty: the chain moves
+    /// as one.
+    hold: Vec<u64>,
+    /// How long the history was when the drag began: a held drag's frames fold into one step.
+    base: usize,
 }
 
 /// The placement a drag on `body` moves: the one on its path just inside the active placement.
@@ -81,15 +88,40 @@ pub fn start(app: &mut SolveApp, proj: &Proj, p: Pos2) -> bool {
     let Some((body, at)) = grabbed_face(app, proj, p) else { return false };
     let Some(path) = placement_of(app, &body) else { return false };
     let s = &app.session;
-    if s.drag_group(&path).is_err() {
+    let Ok(group) = s.drag_group(&path) else {
         return false;
-    }
+    };
+    // The chain's other parts stay put while the grabbed one moves, when the person wants that.
+    let hold: Vec<u64> = if app.preferences.drag_moves_only_part { group.iter().skip(1).filter_map(|p| p.last().copied()).collect() } else { Vec::new() };
     let Some(local) = s.occurrence_placement(&path).ok().and_then(|x| mat_inverse(&x.world)).map(|inv| apply_point(&inv, at)) else {
         return false;
     };
+    let base = app.session.undo.len();
     let checkpoint = app.session.execute("edit.checkpoint", &json!({})).ok().and_then(|r| r["checkpoint"].as_u64());
-    app.viewport.occurrence_drag = Some(Drag { path, local, origin: at, normal: proj.ray(p).1, checkpoint, step: None });
+    app.viewport.occurrence_drag = Some(Drag { path, local, origin: at, normal: proj.ray(p).1, checkpoint, step: None, hold, base });
     true
+}
+
+/// One frame of a held drag: the chain's other parts grounded for the moment, the grabbed one
+/// brought toward `target` as far as its joints allow (`joint.reach`), the others let go again;
+/// every frame folds into the drag's one undo step.
+fn held_frame(app: &mut SolveApp, d: &Drag, at: Vec3, target: Vec3) {
+    let Some(&occurrence) = d.path.last() else { return };
+    for o in &d.hold {
+        let _ = app.session.execute("occurrence.ground", &json!({"occurrence": o, "grounded": true}));
+    }
+    let _ = app.run("joint.reach", json!({"occurrence": occurrence, "at": [at.x, at.y, at.z], "point": [target.x, target.y, target.z], "continuous": true, "quiet": true}));
+    for o in &d.hold {
+        let _ = app.session.execute("occurrence.ground", &json!({"occurrence": o, "grounded": false}));
+    }
+    // The first step holds the design from before the drag: undo takes the whole drag back.
+    let undo = &mut app.session.undo;
+    if undo.len() > d.base + 1 {
+        undo.truncate(d.base + 1);
+    }
+    if let Some(step) = undo.get_mut(d.base) {
+        step.label = "Move".into();
+    }
 }
 
 pub fn active(app: &SolveApp) -> bool {
@@ -120,25 +152,34 @@ pub fn to(app: &mut SolveApp, proj: &Proj, p: Pos2) {
     if !target.is_finite() || !at.is_finite() || target.dist(at) < 1e-9 {
         return;
     }
+    if !d.hold.is_empty() {
+        held_frame(app, &d, at, target);
+        return;
+    }
     let params = json!({"path": d.path, "at": [at.x, at.y, at.z], "point": [target.x, target.y, target.z], "continuous": true});
-    // One undo step for the whole drag: the first frame's, kept on top while the others run.
-    let own = if d.step.is_some() { app.session.undo.pop() } else { None };
+    let step = run_frame(app, params, d.step);
+    if let Some(d) = app.viewport.occurrence_drag.as_mut() {
+        d.step = step;
+    }
+}
+
+/// One frame of a drag: `occurrence.drag` with `params`, keeping the whole drag to one undo
+/// step, the first frame's, kept on top while the others run. `step` is the drag's step so far
+/// (none before the first frame that moved anything); the step after this frame is returned.
+pub(crate) fn run_frame(app: &mut SolveApp, params: serde_json::Value, step: Option<Arc<Document>>) -> Option<Arc<Document>> {
+    let own = if step.is_some() { app.session.undo.pop() } else { None };
     let before = app.session.doc.clone();
     let pushed = app.run("occurrence.drag", params).is_ok() && !Arc::ptr_eq(&before, &app.session.doc);
     match own {
-        Some(step) => {
+        Some(own) => {
             if pushed {
                 app.session.undo.pop();
             }
-            app.session.undo.push(step);
+            app.session.undo.push(own);
+            step
         }
-        None if pushed => {
-            let step = app.session.undo.last().map(|step| step.doc.clone());
-            if let Some(d) = app.viewport.occurrence_drag.as_mut() {
-                d.step = step;
-            }
-        }
-        None => {}
+        None if pushed => app.session.undo.last().map(|step| step.doc.clone()),
+        None => None,
     }
 }
 

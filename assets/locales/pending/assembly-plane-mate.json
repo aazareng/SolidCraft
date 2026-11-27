@@ -1,0 +1,10 @@
+{
+  "en": {
+    "cmd.ui.drill_down": "Drill Down",
+    "cmd.ui.drill_up": "Drill Up",
+    "cmd.ui.ortho": "Ortho",
+    "cmd.ui.plane_mate": "Plane Mate",
+    "cmd.ui.shortcut_bar": "Shortcut Bar",
+    "cmd.ui.smart_edit": "Smart Edit"
+  }
+}

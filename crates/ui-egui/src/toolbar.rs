@@ -1443,6 +1443,8 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
     } else {
         Container::paint_inset(ui.painter(), chrome.response.rect - frame.outer_margin, frame);
     }
+    // What is laid over the view (the breadcrumbs) stays below the ribbon.
+    app.ui.ribbon_bottom = if floating { cards.ribbon.bottom().max(cards.workspace.bottom()) } else { chrome.response.rect.bottom() };
     if folded && (app.ui.ribbon_open || tab_click.is_some()) {
         app.ui.ribbon_open = true;
         open_ribbon(app, ui, available, chrome.response.rect);
@@ -2996,6 +2998,7 @@ pub(crate) fn unfinished(app: &SolveApp) -> bool {
         || app.viewport.joint_handles.is_some()
         || app.viewport.text_drag.is_some()
         || crate::occurrence_drag::active(app)
+        || crate::occurrence_rotate::active(app)
         || crate::joint_drag::cancellable(app)
 }
 
@@ -3006,6 +3009,7 @@ pub(crate) fn cancel_unfinished(app: &mut SolveApp) -> bool {
     if crate::joint_handles::cancel(app)
         || crate::sketch_text_move::cancel_drag(app)
         || crate::occurrence_drag::cancel(app)
+        || crate::occurrence_rotate::cancel(app)
         || crate::joint_drag::cancel(app)
     {
         return true;
@@ -4228,7 +4232,7 @@ mod header_report_tests {
         let search = rect("ribbon:search");
         assert!(search.top() >= APP_BAR_HEIGHT, "search is in the ribbon: {search:?}");
         assert_eq!(search.height(), TAB_ROW_HEIGHT - 2.0 * ribbon::CARD_INSET);
-        assert_eq!(search.width(), crate::ui_kit::CommandSearch::closed_width(&h.ctx, Some("S")));
+        assert_eq!(search.width(), crate::ui_kit::CommandSearch::closed_width(&h.ctx, Some("Ctrl+Shift+P")));
         assert!(crate::scenario::rect_of("titlebar:search").is_none());
         let report = rect("titlebar:report");
         // The version owns its text width and twelve points of padding on each side.
@@ -4268,7 +4272,7 @@ mod header_report_tests {
         let (search, prefs) = (rect("titlebar:search"), rect("titlebar:preferences"));
         assert_eq!(search.right(), prefs.left() - HEADER_SEARCH_GAP, "search sits immediately left of Settings");
         assert!(search.bottom() <= APP_BAR_HEIGHT && (search.center().y - prefs.center().y).abs() < 0.5);
-        assert_eq!(search.width(), crate::ui_kit::CommandSearch::closed_width(&h.ctx, Some("S")), "the whole field where there is room");
+        assert_eq!(search.width(), crate::ui_kit::CommandSearch::closed_width(&h.ctx, Some("Ctrl+Shift+P")), "the whole field where there is room");
         assert_eq!(rect("ribbon:search"), search, "the one search field is drawn in the bar");
         // Report a bug: an icon the size of Settings and Help, still named for assistive tools.
         let report = rect("titlebar:report");

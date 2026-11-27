@@ -56,7 +56,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params("Reset the saved application bar layout in the connected app; returns {reset: true}. Headless sessions validate the request only; no dialog or design change"),
     CommandSpec::new("ui.palette", "Search Commands", crate::checked!("ui.palette", palette))
         .icon("zoom")
-        .key("S")
+        .key("Ctrl+Shift+P")
         .noundo()
         .doc_only()
         .contract(&PALETTE_CONTRACT)
@@ -70,6 +70,54 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&TOGGLE_VISIBILITY_CONTRACT)
         .output(crate::schema::output_schema_for::<crate::schema::edit::ToggleVisibilityResult>)
         .params("Show or hide what is selected in the app. Headless calls are refused without changing the design; browser.visibility takes explicit items"),
+    CommandSpec::new("ui.plane_mate", "Plane Mate", crate::checked!("ui.plane_mate", plane_mate))
+        .icon("constrain")
+        .key("Shift+P")
+        .noundo()
+        .doc_only()
+        .contract(&PLANE_MATE_CONTRACT)
+        .output(crate::schema::output_schema_for::<crate::schema::edit::PlaneMateResult>)
+        .params("One step of Plane Mate on the app's selection, pressed again for the next: faces, edges and parts become their placement's origin plane most parallel to the face (or to the screen), one plane gets the assembly's, then two planes are made parallel, then coincident. Headless calls are refused; assembly.constraint.create takes explicit planes"),
+    CommandSpec::new("ui.ortho", "Ortho", crate::checked!("ui.ortho", ortho))
+        .icon("c_hv")
+        .key("Shift+O")
+        .noundo()
+        .doc_only()
+        .contract(&ORTHO_CONTRACT)
+        .output(crate::schema::output_schema_for::<crate::schema::edit::OrthoResult>)
+        .params("In the open sketch, on the app's selection (every line and arc when nothing is selected): each line horizontal or vertical, whichever it is nearer; two points (or one and the origin) horizontal or vertical to each other; each arc tangent to the lines and arcs joined at its ends. Lines already held are left alone. Headless calls are refused; use sketch.constraint.horizontal_vertical and sketch.constraint.tangent"),
+    CommandSpec::new("ui.smart_edit", "Smart Edit", crate::checked!("ui.smart_edit", smart_edit))
+        .icon("edit")
+        .key("Shift+D")
+        .noundo()
+        .doc_only()
+        .contract(&SMART_EDIT_CONTRACT)
+        .output(crate::schema::output_schema_for::<crate::schema::edit::SmartEditResult>)
+        .params("Edit what the app has picked: in a sketch, finish it; a face, the sketch (else the dialog) of the feature that made it; a feature, its sketch or dialog; a plane, a new sketch on it; a part, Edit in Place; nothing, the sketch edited last (or a new one on the plane facing the screen). Headless calls are refused; use sketch.edit and timeline.edit"),
+    CommandSpec::new("ui.drill_up", "Drill Up", crate::checked!("ui.drill_up", drill))
+        .icon("select")
+        .key("Alt+Up")
+        .noundo()
+        .doc_only()
+        .contract(&DRILL_CONTRACT)
+        .output(crate::schema::output_schema_for::<crate::schema::edit::DrillResult>)
+        .params("The app's last pick becomes what holds it, the other picks kept: a face or edge of a placed part its part, a part in a sub-assembly that sub-assembly, an edge of the design's own bodies its tangent chain, a feature the one before it, a sketch curve its chain. Headless calls are refused; use select.set"),
+    CommandSpec::new("ui.drill_down", "Drill Down", crate::checked!("ui.drill_down", drill))
+        .icon("select")
+        .key("Alt+Down")
+        .noundo()
+        .doc_only()
+        .contract(&DRILL_CONTRACT)
+        .output(crate::schema::output_schema_for::<crate::schema::edit::DrillResult>)
+        .params("Back down the way Drill Up came, one step a press; otherwise a feature becomes the one after it, a face of the design's own bodies its feature's sketch, a sketch line its midpoint, an arc or circle its centre. Headless calls are refused; use select.set"),
+    CommandSpec::new("ui.shortcut_bar", "Shortcut Bar", crate::checked!("ui.shortcut_bar", shortcut_bar))
+        .icon("zoom")
+        .key("S")
+        .noundo()
+        .doc_only()
+        .contract(&SHORTCUT_BAR_CONTRACT)
+        .output(crate::schema::output_schema_for::<crate::schema::edit::ShortcutBarResult>)
+        .params("Open the app's shortcut bar at the pointer: the tools set for the mode it is in (part, assembly, sketch, drawing, workspace), a search box for any other, and Customize to change the set. Headless calls are refused"),
     CommandSpec::new("ui.dialog_ok", "Dialog OK", crate::checked!("ui.dialog_ok", dialog_ok))
         .icon("finish")
         .noundo()
@@ -419,6 +467,41 @@ const TOGGLE_VISIBILITY_CONTRACT: crate::schema::TypedContract<crate::schema::ed
 /// it runs in `SolveApp::start`, and its key can be moved in Preferences › Shortcuts.
 fn toggle_visibility(_s: &mut Session, _p: &Value) -> Result<Value> {
     Err(EngineError::Other("ui.toggle_visibility acts on the app's selection; use browser.visibility in a headless session".into()))
+}
+
+const PLANE_MATE_CONTRACT: crate::schema::TypedContract<crate::schema::edit::PlaneMateParams> = crate::schema::TypedContract::new();
+
+/// Plane Mate works on the app's selection and view: the app runs it in `SolveApp::start`.
+fn plane_mate(_s: &mut Session, _p: &Value) -> Result<Value> {
+    Err(EngineError::Other("ui.plane_mate acts on the app's selection; use assembly.constraint.create with origin planes in a headless session".into()))
+}
+
+const ORTHO_CONTRACT: crate::schema::TypedContract<crate::schema::edit::OrthoParams> = crate::schema::TypedContract::new();
+
+/// Ortho works on the app's selection in its open sketch: the app runs it in `SolveApp::start`.
+fn ortho(_s: &mut Session, _p: &Value) -> Result<Value> {
+    Err(EngineError::Other("ui.ortho acts on the app's selection; use sketch.constraint.horizontal_vertical and sketch.constraint.tangent in a headless session".into()))
+}
+
+const SMART_EDIT_CONTRACT: crate::schema::TypedContract<crate::schema::edit::SmartEditParams> = crate::schema::TypedContract::new();
+
+/// Smart Edit opens the app's editors on its selection: the app runs it in `SolveApp::start`.
+fn smart_edit(_s: &mut Session, _p: &Value) -> Result<Value> {
+    Err(EngineError::Other("ui.smart_edit opens the app's editors on its selection; use sketch.edit or timeline.edit in a headless session".into()))
+}
+
+const DRILL_CONTRACT: crate::schema::TypedContract<crate::schema::edit::DrillParams> = crate::schema::TypedContract::new();
+
+/// Drill Up and Down move the app's selection: the app runs them in `SolveApp::start`.
+fn drill(_s: &mut Session, _p: &Value) -> Result<Value> {
+    Err(EngineError::Other("ui.drill_up and ui.drill_down move the app's selection; use select.set in a headless session".into()))
+}
+
+const SHORTCUT_BAR_CONTRACT: crate::schema::TypedContract<crate::schema::edit::ShortcutBarParams> = crate::schema::TypedContract::new();
+
+/// The shortcut bar is the app's: it opens it in `SolveApp::start`.
+fn shortcut_bar(_s: &mut Session, _p: &Value) -> Result<Value> {
+    Err(EngineError::Other("ui.shortcut_bar opens the app's shortcut bar; a headless session has none: run the command itself".into()))
 }
 
 const DIALOG_OK_CONTRACT: crate::schema::TypedContract<crate::schema::edit::DialogOkParams> = crate::schema::TypedContract::new();

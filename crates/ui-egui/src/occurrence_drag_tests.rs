@@ -153,6 +153,8 @@ fn the_active_placement_decides_which_occurrence_moves() {
 #[test]
 fn either_member_of_a_floating_hinge_drags_the_whole_chain() {
     let (mut h, base, free) = two_parts();
+    // The chain moving as one is the way with Drag moves only the part off.
+    h.app.preferences.drag_moves_only_part = false;
     run(&mut h, "occurrence.ground", json!({"occurrence": base, "grounded": false}));
     let at = |o| json!({"occurrence": o, "point": [0, 0, 0], "z": [0, 0, 1]});
     run(&mut h, "joint.create", json!({"type": "revolute", "a": at(base), "b": at(free), "flip": true}));
@@ -185,6 +187,34 @@ fn either_member_of_a_floating_hinge_drags_the_whole_chain() {
         run(&mut h, "edit.undo", json!({}));
         assert_eq!(h.app.session.doc.to_json(), before);
     }
+}
+
+/// With Drag moves only the part on (the default), a drag on the free member of a floating hinge
+/// turns it about the hinge and the other member stays where it is; the drag is one undo step
+/// and leaves nothing grounded.
+#[test]
+fn only_the_dragged_member_of_a_floating_hinge_moves() {
+    let (mut h, base, free) = two_parts();
+    assert!(h.app.preferences.drag_moves_only_part, "on by default");
+    run(&mut h, "occurrence.ground", json!({"occurrence": base, "grounded": false}));
+    let at = |o| json!({"occurrence": o, "point": [0, 0, 0], "z": [0, 0, 1]});
+    run(&mut h, "joint.create", json!({"type": "revolute", "a": at(base), "b": at(free), "flip": true}));
+    h.frames(2);
+    let before = h.app.session.doc.to_json();
+    let (base_at, free_at) = (origin(&h, &[base]), origin(&h, &[free]));
+    let undo = h.app.session.undo.len();
+    // The free part's far corner, pulled sideways: it can only turn about the hinge.
+    let grab = Vec3::new(25.0, 5.0, 10.0) + (free_at - base_at);
+    let (a, b) = (screen(&mut h, grab), screen(&mut h, grab + Vec3::new(0.0, 30.0, 0.0)));
+    press_and_move(&mut h, a, b, Default::default());
+    release(&mut h, b);
+    assert!(origin(&h, &[base]).dist(base_at) < 1e-6, "the other member stays: {:?}", origin(&h, &[base]));
+    let turned = h.app.session.doc.assembly.joints[0].values.first().copied().unwrap_or(0.0);
+    assert!(turned.abs() > 1e-3, "the hinge turned: {turned}");
+    assert!(h.app.session.doc.occurrences.iter().all(|o| !o.grounded), "nothing left grounded");
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step");
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(h.app.session.doc.to_json(), before);
 }
 
 /// Where the drags on the two copies grab their top face: off the origin, whose axes a press on

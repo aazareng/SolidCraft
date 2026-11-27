@@ -2181,14 +2181,19 @@ mod tests {
         let mut h = crate::scenario::Harness::new();
         h.app.home.open = false;
         h.frames(2);
-        assert_eq!(effective(&h.app, "ui.palette").as_deref(), Some("S"));
-        h.step(&json!({"key": "S"})).unwrap();
-        assert!(h.app.ui.palette_open, "S opens command search by default");
+        // Command search is on Ctrl+Shift+P; S opens the shortcut bar.
+        assert_eq!(effective(&h.app, "ui.palette").as_deref(), Some("Ctrl+Shift+P"));
+        assert_eq!(effective(&h.app, "ui.shortcut_bar").as_deref(), Some("S"));
+        h.step(&json!({"key": "P", "ctrl": true, "shift": true})).unwrap();
+        assert!(h.app.ui.palette_open, "Ctrl+Shift+P opens command search by default");
         h.call("ui.palette", json!({"open": false}));
         h.frames(2);
         bind(&mut h.app, "ui.palette", "Shift+J", true).unwrap();
         h.step(&json!({"key": "S"})).unwrap();
         assert!(!h.app.ui.palette_open, "S no longer opens command search");
+        // S opened the shortcut bar, whose search box has the keyboard: Esc closes it.
+        h.step(&json!({"key": "Escape"})).unwrap();
+        h.frames(1);
         h.step(&json!({"key": "J", "shift": true})).unwrap();
         assert!(h.app.ui.palette_open, "its new key does");
         h.call("ui.palette", json!({"open": false}));

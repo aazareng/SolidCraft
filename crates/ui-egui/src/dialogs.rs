@@ -3525,7 +3525,7 @@ fn placement_row(d: &mut Dialog, ui: &mut egui::Ui, app: &SolveApp) {
 
 /// Switch a Hole dialog between Single (a face place) and Multiple (sketch points) placement:
 /// the placement inputs start over empty, and the direction taken from a face is dropped.
-fn set_hole_placement(d: &mut Dialog, multiple: bool) {
+pub(crate) fn set_hole_placement(d: &mut Dialog, multiple: bool) {
     let Kind::Hole { opts, .. } = &mut d.kind else { return };
     opts.multiple = multiple;
     d.inputs = if multiple { vec![SelInput::new("Points", selection::POINTS, true)] } else { single_hole_inputs() };
@@ -5461,9 +5461,15 @@ fn remembered_extra_keys(kind: &Kind) -> &'static [&'static str] {
     }
 }
 
+/// Dialogs that start from the last one's options whatever Remember Dialog Values says: Hole
+/// (its type, sizes and Placement), which is set up once and drilled many times.
+fn always_remembered(kind: &Kind) -> bool {
+    matches!(kind, Kind::Hole { .. })
+}
+
 /// Keep the options and values of an applied dialog for the next one of the same command.
 fn remember(app: &mut SolveApp, dialog: &Dialog) {
-    if !app.preferences.remember_dialog_values {
+    if !app.preferences.remember_dialog_values && !always_remembered(&dialog.kind) {
         return;
     }
     let kind = &dialog.kind;
@@ -5480,7 +5486,7 @@ fn remember(app: &mut SolveApp, dialog: &Dialog) {
 /// A new dialog starts from what the last one of its command applied. Picks and context-dependent
 /// values come from the newly constructed dialog instead.
 fn recall(app: &SolveApp, dialog: &mut Dialog) {
-    if !app.preferences.remember_dialog_values {
+    if !app.preferences.remember_dialog_values && !always_remembered(&dialog.kind) {
         return;
     }
     let Some(last) = app.remembered_commands.iter().find(|entry| same_command(&entry.kind, &dialog.kind)) else { return };
@@ -5674,6 +5680,11 @@ pub fn cancel(app: &mut SolveApp) {
         crate::dialogs_motion::closed(app, &mut d, false);
         if let Kind::Text(k) = &mut d.kind {
             crate::sketch_text::closed(app, k, false);
+        }
+        // A new Hole closed without OK keeps its options too (Placement, type, sizes): the next
+        // Hole starts from them, as it does after an applied one.
+        if d.editing.is_none() && matches!(d.kind, Kind::Hole { .. }) {
+            remember(app, &d);
         }
         app.dialog = Some(d);
     }

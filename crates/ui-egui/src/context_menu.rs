@@ -295,6 +295,12 @@ pub struct MenuState {
     pub browser_menu: BrowserMenu,
     /// Clicks and selections the quick menu follows.
     pub(crate) quick: crate::quick_menu::Watch,
+    /// The quick constrain bar for two picks on two parts.
+    pub(crate) constrain: crate::quick_constrain::Watch,
+    /// The shortcut bar, while it is open.
+    pub(crate) shortcut: crate::shortcut_bar::Watch,
+    /// The card one pick on a placed part opens.
+    pub(crate) card: crate::pick_card::Watch,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -3687,6 +3693,9 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     show_rename(app, ctx);
     crate::design_properties::show_object(app, ctx);
     crate::quick_menu::watch(app, ctx);
+    crate::quick_constrain::show(app, ctx);
+    crate::pick_card::show(app, ctx);
+    crate::shortcut_bar::show(app, ctx);
     if app.viewport.context_menu.is_none() {
         return;
     }

@@ -89,6 +89,7 @@ mod dock_dialog_ui_tests;
 pub mod documents;
 pub mod drag_extrude;
 pub mod drag_snap;
+pub(crate) mod drill;
 pub mod easyprint_ui;
 pub mod edit_clipboard;
 pub mod edit_in_place;
@@ -163,6 +164,8 @@ pub mod mesh_units;
 pub mod messages;
 pub(crate) mod motion;
 pub mod occurrence_drag;
+pub mod occurrence_rotate;
+pub mod quick_constrain;
 #[cfg(test)]
 mod pattern_arrow_tests;
 #[cfg(test)]
@@ -266,14 +269,17 @@ pub mod op_auto;
 pub mod open_elsewhere;
 pub(crate) mod open_meshing;
 pub mod operations;
+pub(crate) mod ortho;
 pub mod panel_runtime;
 pub mod params_dialog;
 pub mod parts_library;
 pub(crate) mod pattern_components;
 pub mod pencil;
 pub mod personal_sheet_rules;
+pub(crate) mod pick_card;
 pub(crate) mod pick_index;
 pub(crate) mod place_gizmo;
+pub(crate) mod plane_mate;
 mod plane_resize;
 mod plugin_events;
 mod plugin_images;
@@ -344,6 +350,7 @@ pub(crate) mod sheet_views;
 pub mod shell;
 #[cfg(test)]
 mod shell_face_sketch_ui_tests;
+pub mod shortcut_bar;
 pub mod shortcut_box;
 pub mod sketch3d;
 #[cfg(test)]
@@ -384,6 +391,7 @@ mod sketch_text_move;
 pub mod sketch_tools;
 mod sketch_transform_ui;
 mod sketch_view;
+pub(crate) mod smart_edit;
 pub mod smart_extrude;
 #[cfg(test)]
 mod smart_extrude_ui_tests;
@@ -483,6 +491,10 @@ pub struct UiState {
     /// a tab click opens them, and a command starting or the pointer leaving closes them.
     #[serde(skip)]
     pub ribbon_open: bool,
+    /// Where the ribbon (the command manager) ends at the bottom, in points, as last drawn: what
+    /// is laid over the view stays below it.
+    #[serde(skip)]
+    pub ribbon_bottom: f32,
     /// Last contextual body/sketch, only used to select on entry.
     #[serde(skip)]
     pub ribbon_context: Option<String>,
@@ -539,6 +551,7 @@ impl Default for UiState {
             ribbon_context: None,
             sketch_return_tab: None,
             ribbon_open: false,
+            ribbon_bottom: 0.0,
             show_browser: true,
             show_timeline: true,
             show_grid: true,
@@ -845,6 +858,10 @@ pub struct SolveApp {
     /// A linked component's design edited in place, with its assembly around it.
     pub edit_in_place: edit_in_place::EditInPlace,
     pub(crate) pending_feature_edit: Option<feature_edit::PendingFeatureEdit>,
+    /// The sketch opened for editing last, which Smart Edit with nothing picked opens again.
+    pub(crate) smart_edit_last: Option<u64>,
+    /// The steps Drill Up made, for Drill Down to retrace.
+    pub(crate) drill: drill::Trail,
     /// The feature being reopened from a click and where, until its dialog opens (UI state only).
     edit_anchor_hint: Option<(u64, solidcore_record::Vec3)>,
     /// The open feature window's check of what its material does (#6901).
@@ -1241,6 +1258,8 @@ impl SolveApp {
             editing_state: None,
             edit_in_place: Default::default(),
             pending_feature_edit: None,
+            smart_edit_last: None,
+            drill: Default::default(),
             edit_anchor_hint: None,
             op_check: op_auto::OpCheck::default(),
             deferred: None,
@@ -2582,6 +2601,35 @@ impl SolveApp {
             }
             return;
         }
+        // Plane Mate acts on the selection and the view: one step per press.
+        if id == "ui.plane_mate" {
+            plane_mate::press(self);
+            return;
+        }
+        // Ortho squares up the open sketch's selection, one undo step.
+        if id == "ui.ortho" {
+            ortho::press(self);
+            return;
+        }
+        // Smart Edit opens the editor the pick most likely wants.
+        if id == "ui.smart_edit" {
+            smart_edit::press(self);
+            return;
+        }
+        // The shortcut bar opens at the pointer.
+        if id == "ui.shortcut_bar" {
+            shortcut_bar::open(self, None);
+            return;
+        }
+        // Drill Up and Down move the last pick to what holds it and back.
+        if id == "ui.drill_up" {
+            drill::up(self);
+            return;
+        }
+        if id == "ui.drill_down" {
+            drill::down(self);
+            return;
+        }
         // Dialog OK runs OK in the open dialog and starts nothing (#17416).
         if id == "ui.dialog_ok" {
             dialogs::confirm(self);
@@ -3581,6 +3629,7 @@ impl SolveApp {
         if self.session.doc.feature_index(id).is_none() {
             return;
         }
+        self.smart_edit_last = Some(id);
         let marker = self.finish_sketch_for_edit();
         if let Err(error) = crate::sketch_view::prepare_edit(self, "sketch.edit", &json!({"sketch":id})) {
             self.set_status(error, true);

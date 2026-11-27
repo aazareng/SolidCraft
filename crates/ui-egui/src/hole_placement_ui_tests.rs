@@ -583,7 +583,11 @@ fn a_single_hole_picked_on_a_sketch_point_with_no_face_under_it_goes_to_multiple
     assert!(solid_at(&h, Vec3::new(22.6, 15.0, 17.0)) && solid_at(&h, Vec3::new(20.0, 15.0, 5.0)), "the wall and floor are solid");
 
     // A Single hole that has its face place already keeps it: the click on the centre changes nothing.
+    // (The new Hole starts from the last one's Multiple: Placement is set back to Single first.)
     h.step(&json!({"start": "solid.hole"})).unwrap();
+    if let Some(d) = h.app.dialog.as_mut() {
+        crate::dialogs::set_hole_placement(d, false);
+    }
     let top = screen(&mut h, Vec3::new(30.0, 8.0, 20.0));
     h.step(&json!({"click": top})).unwrap();
     assert_eq!(face_places(&h).len(), 1, "the top face is picked");
@@ -1192,4 +1196,36 @@ fn hole_presets_dirty_invalid_active_scalars_refuse_overwrite() {
         assert_eq!(serde_json::to_value(&h.app.preferences.hole_presets).unwrap(), saved, "{invalid}");
         assert!(preset_dirty_save_enabled(&h));
     }
+}
+
+/// Placement set to Multiple and the dialog closed without OK: the next Hole starts in Multiple,
+/// until Placement is changed back the same way.
+#[test]
+fn a_hole_closed_without_ok_keeps_its_placement_for_the_next() {
+    let mut h = Harness::new();
+    h.app.home.open = false;
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    let placement = |h: &Harness| match h.app.dialog.as_ref().map(|d| &d.kind) {
+        Some(Kind::Hole { opts, .. }) => Some(opts.multiple),
+        _ => None,
+    };
+    h.app.start("solid.hole");
+    h.frames(2);
+    assert_eq!(placement(&h), Some(false), "Single to start with");
+    if let Some(d) = h.app.dialog.as_mut() {
+        crate::dialogs::set_hole_placement(d, true);
+    }
+    crate::dialogs::cancel(&mut h.app);
+    h.frames(1);
+    h.app.start("solid.hole");
+    h.frames(2);
+    assert_eq!(placement(&h), Some(true), "Multiple, as it was left");
+    if let Some(d) = h.app.dialog.as_mut() {
+        crate::dialogs::set_hole_placement(d, false);
+    }
+    crate::dialogs::cancel(&mut h.app);
+    h.frames(1);
+    h.app.start("solid.hole");
+    h.frames(2);
+    assert_eq!(placement(&h), Some(false), "back to Single");
 }
