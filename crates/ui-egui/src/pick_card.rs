@@ -368,12 +368,28 @@ fn crumb_cell(ui: &mut egui::Ui, key: &str, cell: &Cell, lit: bool) -> egui::Res
     r
 }
 
+/// What two picks are called in the breadcrumbs: "Face + Face", "Edge + Point".
+fn pair_label(sel: &[Sel]) -> String {
+    let kind = |s: &Sel| match s {
+        Sel::Face { .. } => "Face",
+        Sel::Edge { .. } => "Edge",
+        Sel::Vertex { .. } => "Point",
+        Sel::SketchCurve { .. } | Sel::ExternalSketchCurve { .. } => "Curve",
+        Sel::SketchPoint { .. } | Sel::ExternalSketchPoint { .. } => "Point",
+        _ => "Item",
+    };
+    sel.iter().map(kind).collect::<Vec<_>>().join(" + ")
+}
+
 /// The breadcrumbs: while one face, edge, point, body, feature or part is picked, its whole
-/// hierarchy in a small grid laid over the view (below the ribbon, right of the Browser), the
-/// pick on the left. A click selects what it names; a mate's mark opens it to edit. A faint grip
-/// moves it (double-click: back in place).
+/// hierarchy in a small grid laid over the view (below the ribbon, right of the Browser), from the
+/// outermost assembly on the left, its planes under it, to the pick on the right with what it
+/// measures (an edge's length, a face's area). Two picks show only what they measure (their
+/// distance; their angle when not parallel). A click selects what it names; a mate's mark opens it
+/// to edit. A faint grip moves it (double-click: back in place).
 fn breadcrumbs(app: &mut SolveApp, ctx: &egui::Context) {
-    if !app.preferences.pick_card || app.session.active_sketch.is_some() || app.session.selection.len() != 1 {
+    let n = app.session.selection.len();
+    if !app.preferences.pick_card || app.session.active_sketch.is_some() || !(1..=2).contains(&n) {
         app.menu.card.crumbs = None;
         return;
     }
@@ -384,11 +400,22 @@ fn breadcrumbs(app: &mut SolveApp, ctx: &egui::Context) {
         return;
     }
     if app.menu.card.crumbs.as_ref().is_none_or(|(seen, _)| *seen != sel) {
-        let columns = sel.first().map(|s| hierarchy(app, s)).unwrap_or_default();
+        let columns = match sel.as_slice() {
+            [one] => hierarchy(app, one),
+            two => vec![col(pair_label(two), None, "measure")],
+        };
         app.menu.card.crumbs = Some((sel, columns));
     }
-    let Some((_, columns)) = app.menu.card.crumbs.clone() else { return };
+    let Some((_, mut columns)) = app.menu.card.crumbs.clone() else { return };
     let Some(view) = app.viewport.layout.as_ref().map(|l| l.content).or(app.viewport.rect) else { return };
+    // What the pick measures, in parentheses after it; two picks show nothing until it is in.
+    let summary = app.quick_measure.summary(app);
+    if n == 2 && summary.is_none() {
+        return;
+    }
+    if let (Some(pick), Some(s)) = (columns.first_mut(), summary) {
+        pick.main.label = format!("{} ({s})", pick.main.label);
+    }
     if columns.is_empty() {
         return;
     }
@@ -410,8 +437,8 @@ fn breadcrumbs(app: &mut SolveApp, ctx: &egui::Context) {
             egui::Grid::new("sc_breadcrumbs_grid").spacing(vec2(6.0, 2.0)).show(ui, |ui| {
                 // Over the crumbs: the mates of each part.
                 ui.label("");
-                for (i, c) in columns.iter().enumerate() {
-                    if i > 0 {
+                for (i, c) in columns.iter().enumerate().rev() {
+                    if i + 1 < columns.len() {
                         ui.label("");
                     }
                     ui.horizontal(|ui| {
@@ -427,7 +454,7 @@ fn breadcrumbs(app: &mut SolveApp, ctx: &egui::Context) {
                     });
                 }
                 ui.end_row();
-                // The trail, the pick first; a faint grip moves it.
+                // The trail, the outermost assembly first and the pick last; a faint grip moves it.
                 let (grip, resp) = ui.allocate_exact_size(vec2(8.0, 16.0), egui::Sense::click_and_drag());
                 let ink = if resp.hovered() || resp.dragged() { ui.visuals().text_color() } else { ui.visuals().weak_text_color().gamma_multiply(0.6) };
                 for row in 0..3 {
@@ -443,8 +470,8 @@ fn breadcrumbs(app: &mut SolveApp, ctx: &egui::Context) {
                     let p = at + resp.drag_delta();
                     moved = Some(Some([p.x, p.y]));
                 }
-                for (i, c) in columns.iter().enumerate() {
-                    if i > 0 {
+                for (i, c) in columns.iter().enumerate().rev() {
+                    if i + 1 < columns.len() {
                         ui.label(egui::RichText::new("›").weak());
                     }
                     let r = crumb_cell(ui, &i.to_string(), &c.main, i == 0);
@@ -458,8 +485,8 @@ fn breadcrumbs(app: &mut SolveApp, ctx: &egui::Context) {
                 ui.end_row();
                 // Under the crumbs: a feature's sketch, a part's planes and origin.
                 ui.label("");
-                for (i, c) in columns.iter().enumerate() {
-                    if i > 0 {
+                for (i, c) in columns.iter().enumerate().rev() {
+                    if i + 1 < columns.len() {
                         ui.label("");
                     }
                     ui.vertical(|ui| {
@@ -503,6 +530,8 @@ enum Do {
     Variants((RowKind, u64)),
     /// Make the constraint that rule instead.
     Swap(u64, Constraint),
+    /// Turn the constraint's second part over (its other side faces the first).
+    Flip(u64),
 }
 
 /// How much a rule holds: 1 a direction (parallel, square, at an angle), 2 a direction and a
@@ -602,7 +631,10 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         let left_n = row.looser.len();
         // The popup's own margin, so the middle cell lands on the icon.
         let margin = 6.0;
-        let origin = egui::pos2(icon.center().x - CROSS * (left_n as f32 + 0.5) - margin, icon.center().y - CROSS * 1.5 - margin);
+        // A constraint can flip: Flip sits over Edit, a second row above the rules.
+        let flips = row.kind == RowKind::Joint && row.rule.is_some();
+        let above = if flips { 2.0 } else { 1.0 };
+        let origin = egui::pos2(icon.center().x - CROSS * (left_n as f32 + 0.5) - margin, icon.center().y - CROSS * (above + 0.5) - margin);
         let mut clicked: Option<Do> = None;
         let cross = Container::new(ctx, Surface::Popup)
             .area(egui::Id::unique("sc_pick_card_cross"))
@@ -615,7 +647,16 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                         ui.allocate_exact_size(vec2(CROSS, CROSS), egui::Sense::hover());
                     }
                 };
-                // Edit, above.
+                // Flip, at the top.
+                if flips {
+                    ui.horizontal(|ui| {
+                        blank(ui, left_n);
+                        if cross_cell(ui, &format!("{key}:flip"), "reverse_normal", solidcraft_ui_text::tr("constrain.flip"), false) {
+                            clicked = Some(Do::Flip(row.id));
+                        }
+                    });
+                }
+                // Edit, above the rules.
                 ui.horizontal(|ui| {
                     blank(ui, left_n);
                     if cross_cell(ui, &format!("{key}:edit"), "edit", "Edit", false) {
@@ -679,7 +720,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         app.menu.card.open = Some(card);
         return;
     }
-    let refresh = matches!(act, Do::Suppress(..) | Do::Delete(..));
+    let refresh = matches!(act, Do::Suppress(..) | Do::Delete(..) | Do::Flip(..));
     let swapped = if let Do::Swap(id, rule) = act { Some((id, rule)) } else { None };
     match run(app, act) {
         // A suppress or delete keeps the card, brought up to date.
@@ -797,6 +838,10 @@ fn run(app: &mut SolveApp, act: Do) -> Result<(), String> {
                 p["angle"] = json!(format!("{:.3} deg", if angle.is_finite() { angle } else { 90.0 }));
             }
             app.run("assembly.constraint.edit", p).map(|_| ())
+        }
+        Do::Flip(id) => {
+            let name = app.session.doc.assembly.joints.iter().find(|j| j.id == id).map(|j| j.name.clone()).ok_or("the constraint is gone")?;
+            app.run("assembly.constraint.edit", json!({"constraint": name, "flip": true})).map(|_| ())
         }
         Do::Variants(_) => Ok(()),
     }

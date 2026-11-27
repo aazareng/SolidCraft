@@ -85,6 +85,27 @@ fn a_part_shows_its_joints_to_suppress_and_delete() {
     assert!(h.app.session.doc.assembly.joints.is_empty());
 }
 
+/// Flip sits over Edit in a mate's cross: a click turns the block over on the plate in one step and
+/// keeps the card open.
+#[test]
+fn a_mates_cross_flips_it() {
+    let mut h = assembly(|_| {});
+    pick(&mut h, Vec3::new(40.0, 50.0, 30.0));
+    let id = joint_rows(&h).first().expect("the mate's row").id;
+    let state = |h: &Harness| h.app.session.doc.assembly.joints.iter().find(|j| j.id == id).map(|j| (j.flip, j.constraint));
+    let (before, undo) = (state(&h), h.app.session.undo.len());
+    h.step(&json!({"click": {"handle": format!("pick_card:joint:{id}:rule")}})).unwrap();
+    h.frames(1);
+    let flip = crate::scenario::handle_at(&format!("pick_card:joint:{id}:flip")).expect("Flip in the cross");
+    let edit = crate::scenario::handle_at(&format!("pick_card:joint:{id}:edit")).expect("Edit in the cross");
+    assert!(flip.y < edit.y && (flip.x - edit.x).abs() < 1.0, "Flip over Edit: {flip:?} / {edit:?}");
+    h.step(&json!({"click": {"handle": format!("pick_card:joint:{id}:flip")}})).unwrap();
+    h.frames(2);
+    assert_ne!(state(&h), before, "it flipped");
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step");
+    assert!(super::is_open(&h.app), "the card stays");
+}
+
 /// A copy a component pattern placed: the card shows the pattern under Made by; a click on its
 /// name selects it.
 #[test]
@@ -144,6 +165,55 @@ fn breadcrumbs_show_a_parts_face_feature_and_sketch() {
     h.frames(1);
     let base = h.app.session.doc.features.iter().find(|f| f.name == "Base").unwrap().id;
     assert_eq!(h.app.session.selection, vec![Sel::Feature { id: base }]);
+}
+
+/// What the breadcrumbs say the selection measures, once it is in.
+fn measured(h: &mut Harness) -> Option<String> {
+    for _ in 0..300 {
+        crate::quick_measure::poll(&mut h.app, &h.ctx);
+        if let Some(s) = h.app.quick_measure.summary(&h.app) {
+            h.frames(1);
+            return Some(s);
+        }
+        h.frames(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    None
+}
+
+/// The breadcrumbs run from the design on the left to the pick on the right, and the pick shows
+/// what it measures (a face its area) with Quick measurement off. Two parallel faces show their
+/// distance, and no angle.
+#[test]
+fn breadcrumbs_put_the_pick_on_the_right_with_what_it_measures() {
+    let mut h = Harness::new();
+    h.app.home.open = false;
+    assert!(!h.app.preferences.quick_measure);
+    for (id, p) in [
+        ("sketch.create", json!({"plane": "XY", "name": "Base"})),
+        ("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [60, 20]})),
+        ("sketch.finish", json!({})),
+        ("solid.extrude", json!({"distance": 10, "name": "Slab"})),
+    ] {
+        h.app.run(id, p).unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    h.frames(2);
+    pick(&mut h, Vec3::new(30.0, 10.0, 10.0));
+    let area = measured(&mut h).expect("the face is measured");
+    assert!(area.contains("1200") || area.contains("1,200"), "60 × 20: {area}");
+    let n = h.app.menu.card.crumbs.as_ref().map_or(0, |(_, c)| c.len());
+    assert!(n >= 3, "face, feature, design");
+    let pick_at = crate::scenario::handle_at("breadcrumb:0").expect("the pick is drawn");
+    let design_at = crate::scenario::handle_at(&format!("breadcrumb:{}", n - 1)).expect("the design is drawn");
+    assert!(pick_at.x > design_at.x, "the pick on the right: {pick_at:?} / {design_at:?}");
+    assert!(crate::scenario::rect_of("measure:quick").is_none(), "no corner readout with its preference off");
+    // The top and the bottom: 10 mm apart, parallel.
+    h.app.session.selection = vec![face(&h.app, Vec3::new(30.0, 10.0, 10.0)), face(&h.app, Vec3::new(30.0, 10.0, 0.0))];
+    let gap = measured(&mut h).expect("the pair is measured");
+    assert!(gap.contains("10") && !gap.contains('°'), "{gap}");
+    let cols = h.app.menu.card.crumbs.as_ref().map(|(_, c)| c.clone()).unwrap_or_default();
+    assert_eq!(cols.iter().map(|c| c.main.label.as_str()).collect::<Vec<_>>(), vec!["Face + Face"]);
+    assert!(crate::scenario::handle_at("breadcrumb:0").is_some(), "drawn once measured");
 }
 
 /// In an assembly the part's column has its mate over it and its planes and origin under it; a

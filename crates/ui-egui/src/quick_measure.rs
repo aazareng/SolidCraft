@@ -33,15 +33,54 @@ struct Key {
 }
 
 impl QuickMeasure {
-    /// The readout as shown: each line a label and its value.
+    /// The readout as shown: each line a label and its value; none with its preference off (the
+    /// breadcrumbs may still have it measured, for [`Self::summary`]).
     pub(crate) fn lines(&self, app: &SolveApp) -> Vec<(String, String)> {
+        if !app.preferences.quick_measure {
+            return Vec::new();
+        }
         self.result.as_ref().map(|r| lines(app, r)).unwrap_or_default()
+    }
+
+    /// The measurement in a few words, for the breadcrumbs: an edge's length (Ø for a round one),
+    /// a face's area; for two picks their distance, and their angle when they aren't parallel.
+    /// `None` while it computes or when there is nothing short to say.
+    pub(crate) fn summary(&self, app: &SolveApp) -> Option<String> {
+        let r = self.result.as_ref()?;
+        let mm = |v: f64, power: i32| crate::prefs::show_mm(app, v, power);
+        let items = r["items"].as_array().map(Vec::as_slice).unwrap_or_default();
+        if let [it] = items {
+            if let Some(d) = it["diameter"].as_f64() {
+                return Some(format!("Ø {}", mm(d, 1)));
+            }
+            return match it["type"].as_str() {
+                Some("edge" | "sketch_curve") => it["length_mm"].as_f64().map(|l| mm(l, 1)),
+                Some("face" | "profile") => it["area_mm2"].as_f64().map(|a| mm(a, 2)),
+                _ => None,
+            };
+        }
+        if items.len() == 2 {
+            let mut parts = Vec::new();
+            if let Some(d) = r["distance_mm"].as_f64() {
+                parts.push(mm(d, 1));
+            }
+            if let Some(a) = r["angle_deg"].as_f64()
+                && a.is_finite()
+                && a.abs() > 0.01
+                && (a.abs() - 180.0).abs() > 0.01
+            {
+                parts.push(format!("{a:.2}°"));
+            }
+            return (!parts.is_empty()).then(|| parts.join(", "));
+        }
+        None
     }
 }
 
-/// Is the readout wanted at all: the preference, a design shown, no Measure tool saying the same.
+/// Is the measurement wanted at all: the readout's preference (or the breadcrumbs, which show it
+/// too), a design shown, no Measure tool saying the same.
 fn wanted(app: &SolveApp) -> bool {
-    app.preferences.quick_measure
+    (app.preferences.quick_measure || app.preferences.pick_card)
         && !app.home.open
         && !crate::render_workspace::active(app)
         && !app.dialog.as_ref().is_some_and(|d| matches!(d.kind, crate::dialogs::Kind::Measure { .. }))
@@ -232,7 +271,8 @@ fn lines(app: &SolveApp, r: &Value) -> Vec<(String, String)> {
 /// above any other. Returns where it is.
 pub(crate) fn show(app: &mut SolveApp, ui: &egui::Ui, view: egui::Rect, taken: &[egui::Rect]) -> Option<egui::Rect> {
     let rows = app.quick_measure.lines(app);
-    if rows.is_empty() || !view.is_finite() || !view.is_positive() {
+    // Measured for the breadcrumbs alone: the corner readout keeps to its own preference.
+    if !app.preferences.quick_measure || rows.is_empty() || !view.is_finite() || !view.is_positive() {
         return None;
     }
     let t = solidcraft_theme::Tokens::get();

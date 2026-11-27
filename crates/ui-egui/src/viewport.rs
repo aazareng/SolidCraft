@@ -8478,6 +8478,8 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
     if !flat {
         crate::occurrence_rotate::track(app, ui, rect);
     }
+    // Alt + wheel drills up and down instead of zooming.
+    crate::drill::wheel(app, ui, rect);
     let input =
         if flat { crate::dialogs_sheet::navigate(app, ui, rect, &resp) } else { crate::navigation::handle(app, ui, rect, &resp, NavCaps::MODEL) };
     // The face under a still pointer keeps its highlight while the view moves under it

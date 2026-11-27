@@ -12,6 +12,10 @@
 //! - A feature: the one after it; a face of the design's own bodies: the sketch of the feature
 //!   that made it.
 //! - In a sketch, a line: its midpoint; an arc or circle: its centre.
+//!
+//! Alt + the mouse wheel over the view does the same: a notch up drills up, a notch down drills
+//! down, and the wheel doesn't zoom while Alt is held (unless Preferences make Alt the wheel's zoom
+//! key: then it zooms, as chosen).
 
 use serde_json::Value;
 use solidcraft_engine::Sel;
@@ -26,10 +30,74 @@ use crate::dialogs_assembly::picked_snap;
 #[derive(Default)]
 pub struct Trail {
     steps: Vec<(Sel, Sel)>,
+    /// Alt + wheel turned so far toward the next step, in notches (a trackpad scrolls in fractions).
+    wheel: f32,
+    /// An Alt + wheel scroll is still running out: egui smooths each notch over a few frames, and
+    /// that tail must not zoom either, even once Alt is let go.
+    quiet: bool,
 }
 
 /// The most steps kept.
 const KEPT: usize = 64;
+
+/// Points of a smooth (trackpad) scroll that make one notch.
+const POINTS_PER_NOTCH: f32 = 50.0;
+
+/// Each frame, before the camera reads the wheel: Alt + wheel over `rect` drills, one step a notch
+/// (up: Drill Up), and those wheel events are taken so the view doesn't zoom.
+pub fn wheel(app: &mut SolveApp, ui: &egui::Ui, rect: egui::Rect) {
+    // The smoothed tail of an Alt + wheel scroll: swallowed until the scroll is over.
+    if app.drill.quiet {
+        if ui.input(|i| i.is_scrolling()) {
+            ui.ctx().input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+        } else {
+            app.drill.quiet = false;
+        }
+    }
+    let over = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| rect.contains(p) && !crate::shell::covered(app, p));
+    if !over {
+        app.drill.wheel = 0.0;
+        return;
+    }
+    let mut notches = 0.0f32;
+    let mut taken = false;
+    // Preferences may make Alt the key that zooms with the wheel: then it keeps zooming.
+    let zoom_modifier = app.preferences.trackpad_zoom_modifier.modifiers();
+    ui.ctx().input_mut(|i| {
+        let alt_only =
+            |m: &egui::Modifiers| m.alt && !m.ctrl && !m.shift && !m.command && !crate::navigation::claims_scroll(*m, zoom_modifier);
+        i.events.retain(|e| match e {
+            egui::Event::MouseWheel { unit, delta, modifiers, .. } if alt_only(modifiers) => {
+                notches += match unit {
+                    egui::MouseWheelUnit::Point => delta.y / POINTS_PER_NOTCH,
+                    egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => delta.y.signum() * delta.y.abs().max(1.0),
+                };
+                taken = true;
+                false
+            }
+            _ => true,
+        });
+        if taken || alt_only(&i.modifiers) {
+            i.smooth_scroll_delta = egui::Vec2::ZERO;
+        }
+    });
+    if taken {
+        app.drill.quiet = true;
+    }
+    if !notches.is_finite() || notches == 0.0 {
+        return;
+    }
+    // A flung wheel drills a few steps at most.
+    app.drill.wheel = (app.drill.wheel + notches).clamp(-4.0, 4.0);
+    while app.drill.wheel >= 1.0 {
+        app.drill.wheel -= 1.0;
+        up(app);
+    }
+    while app.drill.wheel <= -1.0 {
+        app.drill.wheel += 1.0;
+        down(app);
+    }
+}
 
 /// One press of Drill Up.
 pub fn up(app: &mut SolveApp) {

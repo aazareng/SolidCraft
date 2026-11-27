@@ -53,6 +53,53 @@ fn a_face_goes_up_to_its_part_and_back_down() {
     assert_eq!(h.app.session.selection, vec![other, top]);
 }
 
+/// Alt + wheel over the view drills: a notch up takes the face to its part, a notch down brings
+/// it back, and the view doesn't zoom.
+#[test]
+fn alt_and_the_wheel_drill_up_and_down_without_zooming() {
+    let mut s = Session::default();
+    let mut run = |id: &str, p: Value| s.execute(id, &p).unwrap_or_else(|e| panic!("{id}: {e}"));
+    for (name, corner) in [("A", [0, 0, 0]), ("B", [40, 0, 0])] {
+        run("component.activate", json!({"component": "root"}));
+        run("component.create", json!({ "name": name }));
+        run("solid.box", json!({"length": 20, "width": 20, "height": 20, "corner": corner}));
+    }
+    run("component.activate", json!({"component": "root"}));
+    drop(run);
+    let b = s.doc.occurrences.iter().find(|o| o.name == "B:1").unwrap().id;
+    let mut h = Harness::new();
+    *h.app = SolveApp::new(s, Services::default());
+    h.app.home.open = false;
+    h.frames(3);
+    let c = h.app.viewport.rect.expect("a view").center();
+    h.step(&json!({"move": [c.x, c.y]})).unwrap();
+    let top = face(&h.app, Vec3::new(50.0, 10.0, 20.0));
+    h.app.session.selection = vec![top.clone()];
+    // Let the view settle (smooth zoom and fitting run over several frames).
+    h.frames(30);
+    let distance = h.app.cam.distance;
+    let notch = |h: &mut Harness, dy: f32, modifiers: egui::Modifiers| {
+        h.app.synthetic.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, dy),
+            modifiers,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        h.frames(30);
+    };
+    notch(&mut h, 1.0, egui::Modifiers::ALT);
+    assert_eq!(h.app.session.selection, vec![Sel::Occurrence { path: vec![b] }]);
+    assert_eq!(h.app.cam.distance, distance, "Alt + wheel up didn't zoom");
+    notch(&mut h, -1.0, egui::Modifiers::ALT);
+    assert_eq!(h.app.session.selection, vec![top.clone()]);
+    assert_eq!(h.app.cam.distance, distance, "Alt + wheel down didn't zoom");
+    // Without Alt the wheel zooms as before and the pick stays.
+    notch(&mut h, 1.0, egui::Modifiers::NONE);
+    assert_ne!(h.app.cam.distance, distance, "the plain wheel zooms");
+    assert_eq!(h.app.session.selection, vec![top]);
+}
+
 /// A feature goes up to the one before it and down to the one after; in a sketch a line goes up
 /// to its rectangle and down to its midpoint.
 #[test]
