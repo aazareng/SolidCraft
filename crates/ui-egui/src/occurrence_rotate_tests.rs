@@ -90,6 +90,37 @@ fn a_right_drag_on_a_free_part_turns_it_about_its_centre() {
     assert!(world(&h, &[free], corner).dist(corner) < 1e-9);
 }
 
+/// A part inside a sub-assembly: a right drag on it from the top turns the sub-assembly (the
+/// placement a left drag would move), about the part's centre.
+#[test]
+fn a_right_drag_on_a_part_in_a_subassembly_turns_the_subassembly() {
+    let mut h = Harness::new();
+    h.app.home.open = false;
+    run(&mut h, "component.activate", json!({"component": "root"}));
+    run(&mut h, "component.create", json!({"name": "Base"}));
+    run(&mut h, "solid.box", json!({"length": 10, "width": 10, "height": 10, "corner": [-5, -5, 0]}));
+    run(&mut h, "component.activate", json!({"component": "root"}));
+    let sub = run(&mut h, "component.create", json!({"name": "Sub"}));
+    let sub_occ = sub["occurrence"].as_u64().expect("occurrence");
+    run(&mut h, "component.activate", json!({"component": sub["component"]}));
+    let p = run(&mut h, "component.create", json!({"name": "P"}));
+    let p_occ = p["occurrence"].as_u64().expect("occurrence");
+    run(&mut h, "solid.box", json!({"length": 10, "width": 10, "height": 10, "corner": [20, 0, 0]}));
+    run(&mut h, "component.activate", json!({"component": "root"}));
+    h.call("ui.view", json!({"view": "top"}));
+    h.app.cam.distance = 200.0;
+    h.frames(3);
+    let corner = Vec3::new(30.0, 0.0, 10.0);
+    let before = world(&h, &[sub_occ, p_occ], corner);
+    let a = screen(&mut h, Vec3::new(25.0, 5.0, 10.0));
+    press_and_move(&mut h, a, a + egui::vec2(90.0, 0.0));
+    assert!(crate::occurrence_rotate::active(&h.app), "turning: {:?}", h.app.viewport.occurrence_turn);
+    right(&mut h, a + egui::vec2(90.0, 0.0), false);
+    play(&mut h);
+    let after = world(&h, &[sub_occ, p_occ], corner);
+    assert!(after.dist(before) > 1.0, "the part turned with its sub-assembly: {before:?} -> {after:?}");
+}
+
 /// Escape mid-turn puts the part back and leaves no undo step.
 #[test]
 fn escape_during_a_turn_puts_the_part_back() {

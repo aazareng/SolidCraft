@@ -157,8 +157,16 @@ fn replace_last(app: &mut SolveApp, with: Vec<Sel>) {
     }
 }
 
-/// The placement path of the part a face, edge or point is on (empty: the design's own body).
-fn part_path(app: &SolveApp, sel: &Sel) -> Vec<u64> {
+/// The placement path of the part a face, edge or point is on, all the way down (a part inside a
+/// sub-assembly: the sub-assembly, then the part), so Drill Up takes the part first and its
+/// sub-assembly next. Empty: the design's own body.
+pub(crate) fn part_path(app: &SolveApp, sel: &Sel) -> Vec<u64> {
+    let (Sel::Face { body, .. } | Sel::Edge { body, .. } | Sel::Vertex { body, .. }) = sel else { return Vec::new() };
+    let model = app.session.model.state();
+    if let Some(path) = app.session.doc.body_frames(&model).into_iter().find(|(name, ..)| name == body).map(|(_, _, path, _)| path.to_vec()) {
+        return path;
+    }
+    // Not placed by a frame: the placement the joints would name.
     let doc = &app.session.doc;
     let occ = picked_snap(app, sel).and_then(|s| s.param.get("occurrence").and_then(Value::as_u64)).unwrap_or(0);
     let Some(o) = doc.occurrences.iter().find(|o| o.id == occ) else { return Vec::new() };

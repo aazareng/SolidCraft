@@ -432,7 +432,7 @@ fn made_row(ui: &mut egui::Ui, made: &mut Made, change: &mut Option<Change>) {
             }
         }
         let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
-        let delete = crate::ui_kit::icon_button_at(ui, r, "delete", "Delete").on_hover_text("Delete");
+        let delete = crate::ui_kit::icon_button_at(ui, r, "delete", "Delete");
         crate::scenario::publish_handle("quick_constrain:made:delete", r.center());
         if delete.clicked() {
             *change = Some(Change::Delete);

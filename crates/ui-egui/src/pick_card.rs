@@ -309,7 +309,7 @@ pub(crate) fn hierarchy(app: &SolveApp, sel: &Sel) -> Vec<Column> {
             let component = app.session.world_state().ok().and_then(|st| st.body(name).map(|b| b.component)).unwrap_or(0);
             if component == 0 { Vec::new() } else { doc.first_path(component) }
         }
-        _ => part_path(app, sel),
+        _ => crate::drill::part_path(app, sel),
     };
     let from = base(app, &path);
     for end in (from + 1..=path.len()).rev() {
@@ -446,7 +446,7 @@ fn breadcrumbs(app: &mut SolveApp, ctx: &egui::Context) {
                         ui.spacing_mut().item_spacing.x = 1.0;
                         for m in &c.above {
                             let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
-                            let b = ui.push_id(("mate", m.joint), |ui| crate::ui_kit::icon_button_at(ui, r, &m.icon, &m.name)).inner.on_hover_text(&m.name);
+                            let b = ui.push_id(("mate", m.joint), |ui| crate::ui_kit::icon_button_at(ui, r, &m.icon, &m.name)).inner;
                             crate::scenario::publish_handle(&format!("breadcrumb:mate:{}", m.joint), r.center());
                             if b.clicked() {
                                 act = Some(CrumbDo::EditJoint(m.joint));
@@ -596,20 +596,26 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             if !card.made_by.is_empty() {
                 ui.separator();
                 ui.label(solidcraft_ui_text::tr_label("Made by"));
-                for row in &card.made_by {
-                    rows(ui, row, &mut act, &mut icons);
-                }
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for row in &card.made_by {
+                        rows(ui, row, &mut act, &mut icons);
+                    }
+                });
             }
             ui.separator();
             if card.joints.is_empty() {
                 ui.label(solidcraft_ui_text::tr_label("No joints"));
             } else {
-                for row in &card.joints {
-                    rows(ui, row, &mut act, &mut icons);
-                }
-                if card.more > 0 {
-                    ui.label(format!("and {} more", card.more));
-                }
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for row in &card.joints {
+                        rows(ui, row, &mut act, &mut icons);
+                    }
+                    if card.more > 0 {
+                        ui.label(format!("+{}", card.more));
+                    }
+                });
             }
             if let Some(e) = &card.error {
                 crate::ui_kit::status_line(ui, e, crate::ui_kit::StatusTone::Error);
@@ -669,8 +675,13 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                     let tip = row.rule.map_or_else(|| row.label.clone(), |r| crate::dialogs_constrain::label(r).to_string());
                     let here: String = row.rule.map_or_else(|| row.icon.clone(), |r| crate::dialogs_constrain::rule_icon(r).to_string());
                     let at = row.rule.map_or_else(|| format!("{key}:here"), |r| format!("variant:{}", r.name()));
+                    // The middle: a feature's selects it; a constraint's closes the cross.
+                    let tip = if row.kind == RowKind::Feature { format!("Select {tip}") } else { tip };
                     if cross_cell(ui, &at, &here, &tip, true) {
-                        clicked = Some(Do::Variants((row.kind, row.id)));
+                        clicked = Some(match row.kind {
+                            RowKind::Feature => Do::Select(Sel::Feature { id: row.id }),
+                            RowKind::Joint => Do::Variants((row.kind, row.id)),
+                        });
                     }
                     for c in row.stricter.iter().copied() {
                         let label = crate::dialogs_constrain::label(c);
@@ -754,7 +765,7 @@ fn cross_cell(ui: &mut egui::Ui, key: &str, icon: &str, tip: &str, here: bool) -
     if here {
         ui.painter().rect_stroke(r.shrink(1.0), 3.0, egui::Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
     }
-    let b = ui.push_id(key, |ui| crate::ui_kit::icon_button_colored(ui, r.shrink(2.0), icon, tip, Some(t.form_ink))).inner.on_hover_text(tip);
+    let b = ui.push_id(key, |ui| crate::ui_kit::icon_button_colored(ui, r.shrink(2.0), icon, tip, Some(t.form_ink))).inner;
     crate::scenario::publish_handle(&format!("pick_card:{key}"), r.center());
     b.clicked()
 }
@@ -770,31 +781,25 @@ fn row_key(row: &Row) -> String {
     }
 }
 
-/// A feature or joint row: its icon, which opens the cross of what can be done with it, and its
-/// name (a click selects a feature, edits a joint).
+/// A feature or joint: its icon alone, its name in the hover text (a suppressed one faded and
+/// struck through). A click opens the cross of what can be done with it.
 fn rows(ui: &mut egui::Ui, row: &Row, act: &mut Option<Do>, icons: &mut Vec<((RowKind, u64), egui::Rect)>) {
     let key = row_key(row);
     ui.push_id(&key, |ui| {
-        ui.horizontal(|ui| {
-            let (rect, _) = ui.allocate_exact_size(vec2(22.0, 22.0), egui::Sense::hover());
-            let ink = solidcraft_theme::Tokens::get().form_ink;
-            let tip = if row.rule.is_some() { "Change, edit, suppress or delete" } else { "Edit, suppress or delete" };
-            let b = crate::ui_kit::icon_button_colored(ui, rect, &row.icon, tip, Some(ink)).on_hover_text(tip);
-            crate::scenario::publish_handle(&format!("pick_card:{key}:rule"), rect.center());
-            if b.clicked() {
-                *act = Some(Do::Variants((row.kind, row.id)));
-            }
-            icons.push(((row.kind, row.id), rect));
-            let text = if row.suppressed { egui::RichText::new(&row.label).weak().strikethrough() } else { egui::RichText::new(&row.label) };
-            let name = ui.add(egui::Label::new(text).truncate().sense(egui::Sense::click())).on_hover_text(&row.label);
-            crate::scenario::publish_handle(&format!("pick_card:{key}"), name.rect.center());
-            if name.clicked() {
-                *act = Some(match row.kind {
-                    RowKind::Feature => Do::Select(Sel::Feature { id: row.id }),
-                    RowKind::Joint => Do::Edit(row.kind, row.id),
-                });
-            }
-        });
+        let (rect, _) = ui.allocate_exact_size(vec2(22.0, 22.0), egui::Sense::hover());
+        let t = solidcraft_theme::Tokens::get();
+        let ink = if row.suppressed { t.text_dim } else { t.form_ink };
+        let tip = if row.suppressed { format!("{} (suppressed)", row.label) } else { row.label.clone() };
+        let b = crate::ui_kit::icon_button_colored(ui, rect, &row.icon, &tip, Some(ink));
+        if row.suppressed {
+            ui.painter().line_segment([rect.left_bottom() + vec2(3.0, -3.0), rect.right_top() + vec2(-3.0, 3.0)], egui::Stroke::new(1.5, t.text_dim));
+        }
+        crate::scenario::publish_handle(&format!("pick_card:{key}:rule"), rect.center());
+        crate::scenario::publish_handle(&format!("pick_card:{key}"), rect.center());
+        if b.clicked() {
+            *act = Some(Do::Variants((row.kind, row.id)));
+        }
+        icons.push(((row.kind, row.id), rect));
     });
 }
 

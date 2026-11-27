@@ -123,7 +123,10 @@ fn a_patterned_copy_shows_its_pattern() {
         let made: Vec<_> = h.app.menu.card.open.as_ref().map(|c| c.made_by.clone()).unwrap_or_default();
         if let Some(row) = made.first() {
             assert_eq!(row.kind, RowKind::Feature);
-            h.step(&json!({"click": {"handle": format!("pick_card:feature:{}", row.id)}})).unwrap();
+            // Its icon opens the cross; the cross's middle selects it.
+            h.step(&json!({"click": {"handle": format!("pick_card:feature:{}:rule", row.id)}})).unwrap();
+            h.frames(1);
+            h.step(&json!({"click": {"handle": format!("pick_card:feature:{}:here", row.id)}})).unwrap();
             h.frames(1);
             assert_eq!(h.app.session.selection, vec![Sel::Feature { id: row.id }]);
             seen = true;

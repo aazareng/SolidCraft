@@ -53,6 +53,38 @@ fn a_face_goes_up_to_its_part_and_back_down() {
     assert_eq!(h.app.session.selection, vec![other, top]);
 }
 
+/// A face of a part inside a sub-assembly goes up to that part first (inside its sub-assembly),
+/// then to the sub-assembly; Drill Down retraces it.
+#[test]
+fn a_face_in_a_subassembly_goes_up_to_its_part_then_the_subassembly() {
+    let mut s = Session::default();
+    let mut run = |id: &str, p: Value| s.execute(id, &p).unwrap_or_else(|e| panic!("{id}: {e}"));
+    run("component.activate", json!({"component": "root"}));
+    run("component.create", json!({"name": "A"}));
+    run("solid.box", json!({"length": 20, "width": 20, "height": 20, "corner": [0, 0, 0]}));
+    run("component.activate", json!({"component": "root"}));
+    let sub = run("component.create", json!({"name": "Sub"}));
+    run("component.activate", json!({"component": sub["component"]}));
+    let p = run("component.create", json!({"name": "P"}));
+    run("solid.box", json!({"length": 20, "width": 20, "height": 20, "corner": [40, 0, 0]}));
+    run("component.activate", json!({"component": "root"}));
+    drop(run);
+    let (sub, p) = (sub["occurrence"].as_u64().unwrap(), p["occurrence"].as_u64().unwrap());
+    let mut h = Harness::new();
+    *h.app = SolveApp::new(s, Services::default());
+    h.app.home.open = false;
+    h.frames(3);
+    let top = face(&h.app, Vec3::new(50.0, 10.0, 20.0));
+    h.app.session.selection = vec![top.clone()];
+    h.app.start("ui.drill_up");
+    assert_eq!(h.app.session.selection, vec![Sel::Occurrence { path: vec![sub, p] }], "the part first");
+    h.app.start("ui.drill_up");
+    assert_eq!(h.app.session.selection, vec![Sel::Occurrence { path: vec![sub] }], "then its sub-assembly");
+    h.app.start("ui.drill_down");
+    h.app.start("ui.drill_down");
+    assert_eq!(h.app.session.selection, vec![top]);
+}
+
 /// Alt + wheel over the view drills: a notch up takes the face to its part, a notch down brings
 /// it back, and the view doesn't zoom.
 #[test]
