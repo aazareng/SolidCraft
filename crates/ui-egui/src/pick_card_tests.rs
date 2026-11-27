@@ -153,7 +153,7 @@ fn breadcrumbs_show_a_parts_face_feature_and_sketch() {
     let main: Vec<&str> = cols.iter().map(|c| c.main.label.as_str()).collect();
     assert_eq!((main.first(), main.get(1)), (Some(&"Face"), Some(&"Slab")), "the pick, then its feature: {main:?}");
     assert_eq!(cols[1].below.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), vec!["Base"], "the driving sketch under the feature");
-    assert_eq!(cols.last().map(|c| c.below.len()), Some(4), "the design's three planes and origin under it: {cols:?}");
+    assert_eq!(cols.last().map(|c| c.below.len()), Some(0), "no planes under the design unless it is the pick: {cols:?}");
     assert!(!super::is_open(&h.app), "no card in a part: nothing placed");
     // Below the ribbon and right of the Browser, in the view.
     let grip = crate::scenario::handle_at("breadcrumb:grip").expect("the trail is drawn");
@@ -223,11 +223,19 @@ fn breadcrumbs_show_a_parts_mates_planes_and_origin() {
     let mut h = assembly(|_| {});
     pick(&mut h, Vec3::new(40.0, 50.0, 30.0));
     let cols = h.app.menu.card.crumbs.as_ref().map(|(_, c)| c.clone()).unwrap_or_default();
-    let (i, part) = cols.iter().enumerate().find(|(_, c)| c.main.label == "Block:1").expect("the part's column");
+    let labels: Vec<&str> = cols.iter().map(|c| c.main.label.as_str()).collect();
+    assert_eq!(labels.len(), 3, "face, the box that made it, the part (no body): {labels:?}");
+    let part = cols.iter().find(|c| c.main.label == "Block:1").expect("the part's column");
     assert_eq!(part.above.len(), 1, "its mate over it");
-    let below: Vec<&str> = part.below.iter().map(|c| c.label.as_str()).collect();
+    assert!(part.below.is_empty(), "its planes only when the part is the pick");
+    // The part picked: its planes and origin under it.
+    let block = h.app.session.doc.occurrences.iter().find(|o| o.name == "Block:1").unwrap().id;
+    h.app.session.selection = vec![Sel::Occurrence { path: vec![block] }];
+    h.frames(2);
+    let cols = h.app.menu.card.crumbs.as_ref().map(|(_, c)| c.clone()).unwrap_or_default();
+    let below: Vec<&str> = cols[0].below.iter().map(|c| c.label.as_str()).collect();
     assert_eq!(below.len(), 4, "three planes and the origin: {below:?}");
-    h.step(&json!({"click": {"handle": format!("breadcrumb:{i}:0")}})).unwrap();
+    h.step(&json!({"click": {"handle": "breadcrumb:0:0"}})).unwrap();
     h.frames(1);
     assert!(matches!(h.app.session.selection.as_slice(), [Sel::Plane { .. }]), "{:?}", h.app.session.selection);
     // A part's planes are off by default: the selected one is drawn while it stays selected.

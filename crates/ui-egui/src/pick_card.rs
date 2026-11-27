@@ -279,36 +279,28 @@ pub(crate) fn hierarchy(app: &SolveApp, sel: &Sel) -> Vec<Column> {
     let doc = &app.session.doc;
     let mut out = Vec::new();
     // The pick itself.
-    let body = match sel {
-        Sel::Face { body, .. } => {
-            out.push(col("Face".into(), Some(sel.clone()), "offset_face"));
-            Some(body.clone())
-        }
-        Sel::Edge { body, .. } => {
-            out.push(col("Edge".into(), Some(sel.clone()), "axis_edge"));
-            Some(body.clone())
-        }
-        Sel::Vertex { body, .. } => {
-            out.push(col("Point".into(), Some(sel.clone()), "point"));
-            Some(body.clone())
-        }
-        Sel::Body { name } => Some(name.clone()),
-        Sel::Feature { id } => {
-            out.extend(feature_col(app, *id));
-            None
-        }
-        Sel::Occurrence { .. } => None,
+    match sel {
+        Sel::Face { .. } => out.push(col("Face".into(), Some(sel.clone()), "offset_face")),
+        Sel::Edge { .. } => out.push(col("Edge".into(), Some(sel.clone()), "axis_edge")),
+        Sel::Vertex { .. } => out.push(col("Point".into(), Some(sel.clone()), "point")),
+        Sel::Feature { id } => out.extend(feature_col(app, *id)),
+        Sel::Body { .. } | Sel::Occurrence { .. } => {}
         _ => return out,
+    }
+    // The feature that made the face (or edge), and its sketch under it.
+    let made = match sel {
+        Sel::Face { body, index, point } => crate::smart_edit::face_feature(app, body, *index, *point),
+        Sel::Edge { body, index, point } => crate::smart_edit::edge_feature(app, body, *index, *point),
+        _ => None,
     };
-    // The feature that made the face, and its sketch under it.
-    if let Sel::Face { body, index, point } = sel
-        && let Some((made, _)) = crate::smart_edit::face_feature(app, body, *index, *point)
-    {
+    if let Some((made, _)) = made {
         out.extend(feature_col(app, made));
     }
-    // The body.
-    if let Some(b) = body.as_ref().filter(|b| !b.is_empty()) {
-        out.push(col(b.clone(), Some(Sel::Body { name: b.clone() }), "body"));
+    // The body, when it is the pick; otherwise the trail goes straight to the part.
+    if let Sel::Body { name } = sel
+        && !name.is_empty()
+    {
+        out.push(col(name.clone(), Some(sel.clone()), "body"));
     }
     // The part and each assembly around it, up to the one being edited.
     let path = match sel {
@@ -323,7 +315,10 @@ pub(crate) fn hierarchy(app: &SolveApp, sel: &Sel) -> Vec<Column> {
     for end in (from + 1..=path.len()).rev() {
         let id = path[end - 1];
         let mut c = col(occ_name(app, id), Some(Sel::Occurrence { path: path[..end].to_vec() }), "component");
-        c.below = origin_cells(app, &path[..end]);
+        // Its planes and origin only when the part itself is the pick.
+        if out.is_empty() {
+            c.below = origin_cells(app, &path[..end]);
+        }
         c.above = doc
             .assembly
             .joints
@@ -334,12 +329,10 @@ pub(crate) fn hierarchy(app: &SolveApp, sel: &Sel) -> Vec<Column> {
             .collect();
         out.push(c);
     }
-    // In a part (nothing placed), the design last, with its own planes.
+    // In a part (nothing placed), the design last.
     if path.is_empty() && app.session.active_component == 0 {
         let name = if doc.name.is_empty() { "Design".to_string() } else { doc.name.clone() };
-        let mut c = col(name, None, "component");
-        c.below = origin_cells(app, &[]);
-        out.push(c);
+        out.push(col(name, None, "component"));
     }
     out
 }
@@ -350,16 +343,29 @@ enum CrumbDo {
     EditJoint(u64),
 }
 
-/// A crumb or an item under one: its icon and name, bold for the pick.
-fn crumb_cell(ui: &mut egui::Ui, key: &str, cell: &Cell, lit: bool) -> egui::Response {
+/// One square of the breadcrumbs, in points.
+const CRUMB: f32 = 18.0;
+
+/// A crumb or an item under one: its icon alone, its name in the hover text; the pick outlined,
+/// with what it measures (`note`) beside it.
+fn crumb_cell(ui: &mut egui::Ui, key: &str, cell: &Cell, lit: bool, note: Option<&str>) -> egui::Response {
     let r = ui
         .push_id(key, |ui| {
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 3.0;
-                let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), egui::Sense::hover());
-                crate::ui_kit::icons::paint_icon(ui.painter(), rect, cell.icon, if lit { 1.0 } else { 0.75 });
-                let text = if lit { egui::RichText::new(&cell.label).strong() } else { egui::RichText::new(&cell.label) };
-                ui.add(egui::Label::new(text).sense(egui::Sense::click()))
+                ui.spacing_mut().item_spacing.x = 2.0;
+                let (rect, resp) = ui.allocate_exact_size(vec2(CRUMB, CRUMB), egui::Sense::click());
+                let t = solidcraft_theme::Tokens::get();
+                if resp.hovered() {
+                    ui.painter().rect_filled(rect, 3.0, ui.visuals().widgets.hovered.weak_bg_fill);
+                }
+                if lit {
+                    ui.painter().rect_stroke(rect.shrink(0.5), 3.0, egui::Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
+                }
+                crate::ui_kit::icons::paint_icon(ui.painter(), rect.shrink(2.0), cell.icon, if lit || resp.hovered() { 1.0 } else { 0.8 });
+                if let Some(note) = note {
+                    ui.label(egui::RichText::new(note).strong());
+                }
+                resp.on_hover_text(&cell.label)
             })
             .inner
         })
@@ -406,16 +412,14 @@ fn breadcrumbs(app: &mut SolveApp, ctx: &egui::Context) {
         };
         app.menu.card.crumbs = Some((sel, columns));
     }
-    let Some((_, mut columns)) = app.menu.card.crumbs.clone() else { return };
+    let Some((_, columns)) = app.menu.card.crumbs.clone() else { return };
     let Some(view) = app.viewport.layout.as_ref().map(|l| l.content).or(app.viewport.rect) else { return };
     // What the pick measures, in parentheses after it; two picks show nothing until it is in.
     let summary = app.quick_measure.summary(app);
     if n == 2 && summary.is_none() {
         return;
     }
-    if let (Some(pick), Some(s)) = (columns.first_mut(), summary) {
-        pick.main.label = format!("{} ({s})", pick.main.label);
-    }
+    let note = summary.map(|s| format!("({s})"));
     if columns.is_empty() {
         return;
     }
@@ -434,13 +438,10 @@ fn breadcrumbs(app: &mut SolveApp, ctx: &egui::Context) {
         .fixed_pos(at)
         .order(egui::Order::Middle)
         .show(ctx, |ui| {
-            egui::Grid::new("sc_breadcrumbs_grid").spacing(vec2(6.0, 2.0)).show(ui, |ui| {
+            egui::Grid::new("sc_breadcrumbs_grid").spacing(vec2(2.0, 1.0)).min_col_width(0.0).show(ui, |ui| {
                 // Over the crumbs: the mates of each part.
                 ui.label("");
-                for (i, c) in columns.iter().enumerate().rev() {
-                    if i + 1 < columns.len() {
-                        ui.label("");
-                    }
+                for c in columns.iter().rev() {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 1.0;
                         for m in &c.above {
@@ -471,10 +472,7 @@ fn breadcrumbs(app: &mut SolveApp, ctx: &egui::Context) {
                     moved = Some(Some([p.x, p.y]));
                 }
                 for (i, c) in columns.iter().enumerate().rev() {
-                    if i + 1 < columns.len() {
-                        ui.label(egui::RichText::new("›").weak());
-                    }
-                    let r = crumb_cell(ui, &i.to_string(), &c.main, i == 0);
+                    let r = crumb_cell(ui, &i.to_string(), &c.main, i == 0, if i == 0 { note.as_deref() } else { None });
                     if r.clicked()
                         && i > 0
                         && let Some(s) = &c.main.sel
@@ -486,13 +484,10 @@ fn breadcrumbs(app: &mut SolveApp, ctx: &egui::Context) {
                 // Under the crumbs: a feature's sketch, a part's planes and origin.
                 ui.label("");
                 for (i, c) in columns.iter().enumerate().rev() {
-                    if i + 1 < columns.len() {
-                        ui.label("");
-                    }
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
                         for (k, cell) in c.below.iter().enumerate() {
-                            let r = crumb_cell(ui, &format!("{i}:{k}"), cell, false);
+                            let r = crumb_cell(ui, &format!("{i}:{k}"), cell, false, None);
                             if r.clicked()
                                 && let Some(s) = &cell.sel
                             {

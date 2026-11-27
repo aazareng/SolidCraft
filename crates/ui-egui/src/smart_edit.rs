@@ -3,6 +3,8 @@
 //! - In a sketch: finish it.
 //! - A face: the sketch of the feature that made it (its profile sketch), else that feature's
 //!   dialog. A face of another part than the active one is edited in its placement.
+//! - An edge: the same for the latest feature that made a face beside it (a hole's rim on a top
+//!   face: the hole, through its points sketch), in the part's placement.
 //! - A feature in the browser: its sketch, or the sketch itself; else its dialog.
 //! - A plane: a new sketch on it.
 //! - A part in an assembly: Edit in Place.
@@ -11,6 +13,7 @@
 
 use solidcraft_engine::Sel;
 use solidcraft_engine::doc::FeatureKind;
+use solidcraft_engine::geom::prelude::*;
 
 use crate::SolveApp;
 
@@ -33,6 +36,7 @@ fn step(app: &mut SolveApp) -> Result<(), String> {
     match sel.as_slice() {
         [] => nothing_picked(app),
         [Sel::Face { body, index, point }] => face(app, body, *index, *point),
+        [Sel::Edge { body, index, point }] => edge(app, body, *index, *point),
         [Sel::Feature { id }] => {
             feature(app, *id, None);
             Ok(())
@@ -121,6 +125,54 @@ pub(crate) fn face_feature(app: &SolveApp, body: &str, index: usize, point: soli
 /// A face: the sketch of the feature that made it, else that feature, edited.
 fn face(app: &mut SolveApp, body: &str, index: usize, point: solidcore_record::Vec3) -> Result<(), String> {
     let (made, placement) = face_feature(app, body, index, point).ok_or("no feature of this part made that face")?;
+    if app.session.doc.feature(made).is_some_and(|f| matches!(f.kind, FeatureKind::Import { .. } | FeatureKind::MeshImport { .. })) {
+        return Err("an imported body has nothing to edit".into());
+    }
+    feature(app, made, placement);
+    Ok(())
+}
+
+/// The faces either side of B-rep edge `index` of `body`, from the exact record.
+pub(crate) fn edge_faces(app: &SolveApp, body: &str, index: usize) -> Vec<usize> {
+    let Ok(st) = app.session.world_state() else { return Vec::new() };
+    let Some(b) = st.body(body) else { return Vec::new() };
+    let record = b.body.record();
+    let mut faces: Vec<usize> = record.edges.get(index).map(|e| e.uses.iter().map(|u| u.face as usize).collect()).unwrap_or_default();
+    faces.sort_unstable();
+    faces.dedup();
+    faces
+}
+
+/// The feature that made edge `index` of `body`: of the features that made the faces either side
+/// of it, the latest in the history (a hole's edge on a top face: the hole), with the placement to
+/// edit it in.
+pub(crate) fn edge_feature(app: &SolveApp, body: &str, index: usize, point: solidcore_record::Vec3) -> Option<(u64, Option<(u64, Vec<u64>)>)> {
+    let order = |id: u64| app.session.doc.features.iter().position(|f| f.id == id).unwrap_or(0);
+    edge_faces(app, body, index)
+        .into_iter()
+        .filter_map(|f| face_feature(app, body, f, inside_face(app, body, f, point).unwrap_or(point)))
+        .max_by_key(|(id, _)| order(*id))
+}
+
+/// A point inside face `face` of `body` near world `near`: the middle of its triangle closest to
+/// it. A point on the edge itself lies on both faces and was on the model before either was made
+/// (a hole's rim is on the top face too), so each face is asked about a point of its own.
+fn inside_face(app: &SolveApp, body: &str, face: usize, near: solidcore_record::Vec3) -> Option<solidcore_record::Vec3> {
+    let st = app.session.world_state().ok()?;
+    let m = st.body(body)?.mesh();
+    m.triangles
+        .iter()
+        .zip(&m.tri_face)
+        .filter(|(_, f)| **f as usize == face)
+        .filter_map(|(t, _)| m.tri(t))
+        .map(|[a, b, c]| (a + b + c) * (1.0 / 3.0))
+        .min_by(|x, y| x.dist(near).total_cmp(&y.dist(near)))
+}
+
+/// An edge: the feature that made it (a hole's circle: the hole), edited as a face's is, through
+/// its sketch, in the part's placement when it is not the active part.
+fn edge(app: &mut SolveApp, body: &str, index: usize, point: solidcore_record::Vec3) -> Result<(), String> {
+    let (made, placement) = edge_feature(app, body, index, point).ok_or("no feature of this part made that edge")?;
     if app.session.doc.feature(made).is_some_and(|f| matches!(f.kind, FeatureKind::Import { .. } | FeatureKind::MeshImport { .. })) {
         return Err("an imported body has nothing to edit".into());
     }

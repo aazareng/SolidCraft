@@ -3,6 +3,7 @@ use serde_json::json;
 use solidcore_record::Vec3;
 use solidcraft_engine::Sel;
 use solidcraft_engine::doc::FeatureKind;
+use solidcraft_engine::geom::prelude::*;
 
 use crate::scenario::Harness;
 
@@ -54,6 +55,34 @@ fn a_face_opens_its_features_sketch_and_again_finishes_it() {
     assert_eq!(h.app.session.active_sketch, Some(base));
     press(&mut h);
     assert_eq!(h.app.session.active_sketch, None);
+}
+
+/// A hole's round edge picked (where it meets the block's top): the hole made it, not the extrude,
+/// so the hole's points sketch opens.
+#[test]
+fn a_holes_edge_opens_the_holes_sketch() {
+    let (mut h, _) = block();
+    for (id, p) in [
+        ("sketch.create", json!({"plane": {"origin": [0, 0, 10], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}, "name": "Pts"})),
+        ("sketch.point", json!({"point": [15, 10], "id": "a"})),
+        ("sketch.finish", json!({})),
+        ("solid.hole", json!({"sketch": "Pts", "points": ["a"], "diameter": 8, "name": "Bore"})),
+    ] {
+        h.app.run(id, p).unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    h.frames(3);
+    let pts = h.app.session.doc.features.iter().find(|f| f.name == "Pts").unwrap().id;
+    // The rim's point at +x of the hole's centre (15, 10) on the top.
+    let p = Vec3::new(19.0, 10.0, 10.0);
+    let st = h.app.session.world_state().unwrap();
+    let b = &st.bodies[0];
+    let m = b.mesh();
+    let index = m.edges.iter().position(|e| e.windows(2).any(|w| p.dist_to_segment(w[0], w[1]) < 0.05)).expect("the rim");
+    let sel = Sel::Edge { body: b.name.clone(), index, point: p };
+    drop(st);
+    h.app.session.selection = vec![sel];
+    press(&mut h);
+    assert_eq!(h.app.session.active_sketch, Some(pts), "the hole's sketch, not the block's");
 }
 
 /// Nothing picked: the sketch edited last opens; in an empty design, a new sketch starts on the
