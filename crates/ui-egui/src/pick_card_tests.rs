@@ -257,7 +257,7 @@ fn breadcrumbs_show_a_parts_mates_planes_and_origin() {
     pick(&mut h, Vec3::new(40.0, 50.0, 30.0));
     let cols = h.app.menu.card.crumbs.as_ref().map(|(_, c)| c.clone()).unwrap_or_default();
     let labels: Vec<&str> = cols.iter().map(|c| c.main.label.as_str()).collect();
-    assert_eq!(labels.len(), 3, "face, the box that made it, the part (no body): {labels:?}");
+    assert_eq!(labels.len(), 4, "face, the box that made it, its body, the part: {labels:?}");
     let part = cols.iter().find(|c| c.main.label == "Block:1").expect("the part's column");
     assert_eq!(part.above.len(), 1, "its mate over it");
     assert!(part.below.is_empty(), "its planes only when the part is the pick");

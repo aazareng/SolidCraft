@@ -50,7 +50,7 @@ fn step(app: &mut SolveApp) -> Result<Option<String>, String> {
     if sels.is_empty() {
         let screen = back(app);
         let name = nearest(&app.session.doc, 0, screen, screen);
-        app.session.selection = vec![sel_of(&app.session.doc, &Planed { part: 0, plane: name.into() })];
+        app.session.selection = vec![sel_of(app, &Planed { part: 0, plane: name.into() })];
         return Ok(Some(format!("Plane Mate: the assembly's {name}; pick a face on a part and press again")));
     }
     if let Some(all) = planes.iter().cloned().collect::<Option<Vec<Planed>>>() {
@@ -59,7 +59,7 @@ fn step(app: &mut SolveApp) -> Result<Option<String>, String> {
                 // The design's plane most parallel to it joins it.
                 let n = normal(&app.session.doc, one);
                 let name = nearest(&app.session.doc, 0, n, back(app));
-                app.session.selection.push(sel_of(&app.session.doc, &Planed { part: 0, plane: name.into() }));
+                app.session.selection.push(sel_of(app, &Planed { part: 0, plane: name.into() }));
                 return Ok(Some(format!("Plane Mate: {} and the assembly's {name}; press again to make them parallel", describe(app, one))));
             }
             [_] => return Err("Plane Mate: that is the assembly's own plane; pick a face on a part as well".into()),
@@ -73,7 +73,7 @@ fn step(app: &mut SolveApp) -> Result<Option<String>, String> {
     for (sel, planed) in sels.iter().zip(&planes) {
         let made = match planed {
             Some(_) => Some(sel.clone()),
-            None => to_plane(app, sel, screen).map(|p| sel_of(&app.session.doc, &p)),
+            None => to_plane(app, sel, screen).map(|p| sel_of(app, &p)),
         };
         if let Some(made) = made
             && !out.contains(&made)
@@ -119,19 +119,6 @@ fn kinds(sels: &[Sel]) -> String {
         })
         .collect();
     names.join(", ")
-}
-
-/// The top-level placement a placement sits in (itself at the top), 0 for the design.
-fn top(doc: &Document, mut occ: u64) -> u64 {
-    for _ in 0..1000 {
-        let Some(o) = doc.occurrences.iter().find(|o| o.id == occ) else { return 0 };
-        if o.parent == 0 {
-            return o.id;
-        }
-        let Some(up) = doc.occurrence_of(o.parent) else { return o.id };
-        occ = up.id;
-    }
-    occ
 }
 
 /// Which way the screen faces (towards the person).
@@ -182,33 +169,49 @@ fn as_plane(app: &SolveApp, sel: &Sel) -> Option<Planed> {
 fn to_plane(app: &SolveApp, sel: &Sel, screen: Vec3) -> Option<Planed> {
     let doc = &app.session.doc;
     let (part, dir) = match sel {
-        Sel::Occurrence { path } => (*path.first()?, screen),
-        // A body: the part it is in.
+        Sel::Occurrence { path } => (one_deep(app, path), screen),
+        // A body: the part it is in, at the copy it sits in.
         Sel::Body { name } => {
-            let component = app.session.world_state().ok()?.body(name)?.component;
-            let occ = if component == 0 { 0 } else { doc.occurrence_of(component)?.id };
-            (top(doc, occ), screen)
+            let model = app.session.model.state();
+            let path = doc.body_frames(&model).into_iter().find(|(n, ..)| n == name).map(|(_, _, p, _)| p).unwrap_or_default();
+            (one_deep(app, &path), screen)
         }
         Sel::Face { .. } | Sel::Edge { .. } | Sel::Vertex { .. } => {
             let snap = picked_snap(app, sel)?;
-            let occ = snap.param.get("occurrence").and_then(Value::as_u64).unwrap_or(0);
             let flat = matches!(sel, Sel::Face { .. }) && snap.kind == SnapKind::FaceCenter && snap.param.get("face").is_some();
-            (top(doc, occ), if flat { snap.z } else { screen })
+            (one_deep(app, &crate::drill::part_path(app, sel)), if flat { snap.z } else { screen })
         }
         _ => return None,
     };
     Some(Planed { part, plane: nearest(doc, part, dir, screen).into() })
 }
 
+/// The placement one level inside the assembly being edited on placement path `path`, however
+/// deep the pick sits: its planes are the ones a mate in this assembly takes. 0: the design's own.
+fn one_deep(app: &SolveApp, path: &[u64]) -> u64 {
+    let base = match &app.session.active_occurrence_path {
+        Some(active) if app.session.active_component != 0 && path.starts_with(active) => active.len(),
+        _ => 0,
+    };
+    path.get(base).copied().unwrap_or(0)
+}
+
 /// The pick of a plane, by its placement's name where that is unique.
-fn sel_of(doc: &Document, p: &Planed) -> Sel {
+fn sel_of(app: &SolveApp, p: &Planed) -> Sel {
+    let doc = &app.session.doc;
+    let app_path = app.session.active_occurrence_path.clone().filter(|_| app.session.active_component != 0);
     if p.part == 0 {
         return Sel::Plane { name: p.plane.clone() };
     }
-    let name = doc.occurrences.iter().find(|o| o.id == p.part).map(|o| o.name.clone()).unwrap_or_default();
-    let unique = !name.is_empty() && doc.occurrences.iter().filter(|o| o.name == name).count() == 1;
-    let prefix = if unique { name } else { p.part.to_string() };
-    Sel::Plane { name: format!("{prefix}/{}", p.plane) }
+    // The Browser's key for it (`o:<ids>/origin/XY`), which the view draws while it is selected
+    // even when the part's planes are hidden.
+    let mut path = match doc.occurrences.iter().find(|o| o.id == p.part).filter(|o| o.parent != 0) {
+        // Inside the assembly being edited: its own copy's path, not its first.
+        Some(o) => app_path.filter(|_| o.parent != 0).unwrap_or_else(|| doc.first_path(o.parent)),
+        None => Vec::new(),
+    };
+    path.push(p.part);
+    Sel::Plane { name: solidcraft_engine::origins::key(&path, &p.plane) }
 }
 
 /// The reference a constraint takes for the plane.

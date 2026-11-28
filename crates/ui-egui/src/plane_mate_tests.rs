@@ -72,7 +72,7 @@ fn faces_and_parts_become_planes_then_parallel_then_coincident() {
     let top = face(&h.app, Vec3::new(5.0, 5.0, 10.0));
     h.app.session.selection = vec![top, Sel::Occurrence { path: vec![block] }];
     crate::keymap::press(&mut h.app, "Shift+P", false);
-    assert_eq!(h.app.session.selection, vec![plane("Plate:1/XY"), plane("Block:1/XY")]);
+    assert_eq!(h.app.session.selection, vec![part_plane(&h, "Plate:1", "XY"), part_plane(&h, "Block:1", "XY")]);
 
     h.app.start("ui.plane_mate");
     let j = h.app.session.doc.assembly.joints.first().expect("a constraint");
@@ -125,7 +125,7 @@ fn shift_p_with_frames_between_presses_mates_the_planes() {
         h.frames(3);
     };
     press(&mut h);
-    assert_eq!(h.app.session.selection, vec![plane("Plate:1/XY"), plane("Block:1/XY")], "status: {:?}", h.app.status);
+    assert_eq!(h.app.session.selection, vec![part_plane(&h, "Plate:1", "XY"), part_plane(&h, "Block:1", "XY")], "status: {:?}", h.app.status);
     press(&mut h);
     assert_eq!(h.app.session.doc.assembly.joints.len(), 1, "parallel made; status: {:?}", h.app.status);
     press(&mut h);
@@ -173,4 +173,22 @@ fn two_copies_of_one_part_go_parallel_and_stay_free() {
     h.app.session.execute("joint.reach", &json!({"occurrence": b, "at": [c.x, c.y, c.z], "point": [c.x + 10.0, c.y, c.z]})).unwrap();
     let after = h.app.session.occurrence_placement(&[b]).unwrap().world[3];
     assert!((after[0] - before[0]).abs() > 5.0, "slides: {before:?} -> {after:?}");
+}
+
+/// The Browser key of origin plane `item` of the top-level part named `occurrence`.
+fn part_plane(h: &Harness, occurrence: &str, item: &str) -> Sel {
+    let id = h.app.session.doc.occurrences.iter().find(|o| o.name == occurrence).expect("the part").id;
+    Sel::Plane { name: solidcraft_engine::origins::key(&[id], item) }
+}
+
+/// The planes the first press picks are drawn while selected, though a part's planes are hidden.
+#[test]
+fn the_planes_picked_are_drawn_while_selected() {
+    let (mut h, block) = plate_and_turned_block();
+    look_down(&mut h.app);
+    let top = face(&h.app, Vec3::new(5.0, 5.0, 10.0));
+    h.app.session.selection = vec![top, Sel::Occurrence { path: vec![block] }];
+    crate::keymap::press(&mut h.app, "Shift+P", false);
+    let shown = crate::viewport::selected_hidden_origins(&h.app);
+    assert_eq!(shown.len(), 2, "both planes drawn: {shown:?}");
 }

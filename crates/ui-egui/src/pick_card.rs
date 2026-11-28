@@ -305,10 +305,11 @@ pub(crate) fn hierarchy(app: &SolveApp, sel: &Sel) -> Vec<Column> {
     }
     // The body, when it is the pick, or when it is one part of a linked assembly (which comes in
     // as one component, each part a body); otherwise the trail goes straight to the part.
+    // The body, a column of its own between the feature and the part (as SolidWorks has it).
     match sel {
         Sel::Body { name } if !name.is_empty() => out.push(col(name.clone(), Some(sel.clone()), "body")),
-        Sel::Face { body, .. } | Sel::Edge { body, .. } | Sel::Vertex { body, .. } if crate::drill::linked_part_body(app, body) => {
-            out.push(col(body.clone(), Some(Sel::Body { name: body.clone() }), "component"));
+        Sel::Face { body, .. } | Sel::Edge { body, .. } | Sel::Vertex { body, .. } if !body.is_empty() => {
+            out.push(col(body.clone(), Some(Sel::Body { name: body.clone() }), "body"));
         }
         _ => {}
     }
@@ -327,8 +328,8 @@ pub(crate) fn hierarchy(app: &SolveApp, sel: &Sel) -> Vec<Column> {
     for end in (from + 1..=path.len()).rev() {
         let id = path[end - 1];
         let mut c = col(occ_name(app, id), Some(Sel::Occurrence { path: path[..end].to_vec() }), "component");
-        // Its planes and origin only when the part itself is the pick.
-        if out.is_empty() {
+        // Its planes and origin when the part itself, or its body, is the pick.
+        if end == path.len() && matches!(sel, Sel::Occurrence { .. } | Sel::Body { .. }) {
             c.below = origin_cells(app, &path[..end]);
         }
         c.above = doc
@@ -611,7 +612,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     for row in &card.made_by {
-                        rows(ui, row, &mut act, &mut icons);
+                        rows(ui, row, card.variants.is_some_and(|k| k != (row.kind, row.id)), &mut act, &mut icons);
                     }
                 });
             }
@@ -622,7 +623,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     for row in &card.joints {
-                        rows(ui, row, &mut act, &mut icons);
+                        rows(ui, row, card.variants.is_some_and(|k| k != (row.kind, row.id)), &mut act, &mut icons);
                     }
                     if card.more > 0 {
                         ui.label(format!("+{}", card.more));
@@ -794,11 +795,15 @@ fn row_key(row: &Row) -> String {
 }
 
 /// A feature or joint: its icon alone, its name in the hover text (a suppressed one faded and
-/// struck through). A click opens the cross of what can be done with it.
-fn rows(ui: &mut egui::Ui, row: &Row, act: &mut Option<Do>, icons: &mut Vec<((RowKind, u64), egui::Rect)>) {
+/// struck through). A click opens the cross of what can be done with it. `hidden`: another's cross
+/// is open, so this one keeps its place but is not drawn (the cross would sit over it).
+fn rows(ui: &mut egui::Ui, row: &Row, hidden: bool, act: &mut Option<Do>, icons: &mut Vec<((RowKind, u64), egui::Rect)>) {
     let key = row_key(row);
     ui.push_id(&key, |ui| {
         let (rect, _) = ui.allocate_exact_size(vec2(22.0, 22.0), egui::Sense::hover());
+        if hidden {
+            return;
+        }
         let t = solidcraft_theme::Tokens::get();
         let ink = if row.suppressed { t.text_dim } else { t.form_ink };
         let tip = if row.suppressed { format!("{} (suppressed)", row.label) } else { row.label.clone() };
